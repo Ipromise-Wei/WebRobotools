@@ -32,6 +32,10 @@ async def _run_api_scenario() -> None:
                 assert visual.json()["map_topic"] == "/map"
                 assert visual.json()["motion_commands_enabled"] is False
 
+                runtime = await client.get("/api/runtime/status")
+                assert runtime.status_code == 200
+                assert runtime.json()["phase"] == "disabled"
+
                 moved = await client.post(
                     "/api/chassis/move", json={"linear": 0.3, "angular": 0.0}
                 )

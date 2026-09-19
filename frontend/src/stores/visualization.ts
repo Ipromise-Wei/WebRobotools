@@ -12,6 +12,7 @@ export const useVisualizationStore = defineStore('visualization', () => {
   const config = ref<VisualizationConfig>({ camera_stream_url: '', map_topic: '/map', plan_topic: '/plan', motion_commands_enabled: false })
   let socket: WebSocket | undefined
   let reconnect: number | undefined
+  let configPoll: number | undefined
   let closed = false
 
   function connect() {
@@ -22,8 +23,18 @@ export const useVisualizationStore = defineStore('visualization', () => {
   }
   async function initialize() {
     [config.value, map.value] = await Promise.all([robotApi.visualizationConfig(), robotApi.map()])
-    closed = false; connect()
+    closed = false
+    connect()
+    configPoll = window.setInterval(async () => {
+      try { config.value = await robotApi.visualizationConfig() }
+      catch { /* The global robot connection indicator reports backend outages. */ }
+    }, 1000)
   }
-  function disconnect() { closed = true; if (reconnect) clearTimeout(reconnect); socket?.close() }
+  function disconnect() {
+    closed = true
+    if (reconnect) clearTimeout(reconnect)
+    if (configPoll) clearInterval(configPoll)
+    socket?.close()
+  }
   return { map, config, initialize, disconnect }
 })

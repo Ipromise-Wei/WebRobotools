@@ -1,5 +1,5 @@
 server:
-  app_name: Robot Web Control
+  app_name: HZAU@AIOT农业AI机器人协同工作平台
   host: 0.0.0.0
   port: 8000
   log_level: INFO
@@ -11,17 +11,65 @@ robot:
   mode: ros2
   state_poll_interval: 0.2
 
-# start_mapping.sh uses ROS_DOMAIN_ID=30. Set the same value before starting this backend.
+# Keep the Web ROS2 adapter and industrial-PC module runtime in the same domain.
 ros2:
   node_name: robot_web_control
-  cmd_vel_topic: /cmd_vel
+  # Commands first pass through the watchdog on the industrial PC.
+  cmd_vel_topic: /webrobot/cmd_vel
   odom_topic: /odom
   battery_topic: /battery_state
   map_topic: /map
   plan_topic: /plan
-  # Keep locked until the industrial-PC driver has a command-timeout watchdog.
-  allow_motion_commands: false
+  allow_motion_commands: true
   command_timeout: 0.5
+  watchdog_status_topic: /webrobot/cmd_vel_watchdog/ready
+  watchdog_timeout: 1.0
 
 visualization:
   camera_stream_url: ""
+
+# Web-managed ROS2 runtime on the industrial PC. Commands are defined here and
+# exposed only as start/stop/restart actions; the API cannot execute arbitrary commands.
+remote_runtime:
+  enabled: true
+  host: 192.168.123.41
+  user: hzauaiot
+  port: 22
+  connect_timeout: 5
+  agent_path: /home/hzauaiot/.local/lib/webrobot/runtime_agent.py
+  domain_id: 30
+  environment_setup:
+    - /opt/ros/humble/setup.bash
+    - /home/hzauaiot/songwei/ChassisControl/install/setup.bash
+    - /home/hzauaiot/songwei/Laser/install/setup.bash
+  tasks:
+    - id: chassis
+      label: Ranger Mini V3 底盘
+      command: /home/hzauaiot/.local/lib/webrobot/chassis_runtime.sh
+      startup_delay: 3
+    - id: lidar
+      label: Livox MID-360
+      command: ros2 launch livox_ros_driver2 msg_MID360_launch.py
+      startup_delay: 5
+    - id: localization
+      label: FAST-LIO
+      command: ros2 launch fast_lio mapping.launch.py config_file:=mid360.yaml rviz:=false
+      startup_delay: 8
+      dependencies: [lidar]
+    - id: laser_scan
+      label: 点云转激光
+      command: ros2 launch fast_lio cloud_to_scan.launch.py
+      startup_delay: 5
+      dependencies: [localization]
+    - id: slam
+      label: SLAM Toolbox
+      command: ros2 launch fast_lio slam_mapping.launch.py
+      startup_delay: 2
+      ready_command: timeout 3 ros2 topic echo /map --once --qos-reliability reliable --qos-durability transient_local
+      ready_timeout: 60
+      dependencies: [laser_scan]
+    - id: navigation
+      label: Nav2 导航
+      command: ros2 launch nav2_bringup navigation_launch.py use_sim_time:=False autostart:=True use_composition:=False params_file:=/home/hzauaiot/songwei/Laser/config/nav2_params.yaml
+      startup_delay: 5
+      dependencies: [chassis, slam]

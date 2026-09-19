@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import axios from 'axios'
 import { robotApi } from '@/api/robot'
 import { RobotSocket } from '@/websocket/robotSocket'
 
@@ -24,6 +25,7 @@ export const useRobotStore = defineStore('robot', () => {
   const state = ref<RobotState>(emptyState)
   const socketConnected = ref(false)
   const busy = ref(false)
+  let streamInFlight = false
   const error = ref('')
   const socket = new RobotSocket<RobotState>(
     (nextState) => { state.value = nextState },
@@ -40,9 +42,38 @@ export const useRobotStore = defineStore('robot', () => {
     busy.value = true
     error.value = ''
     try { state.value = (await action()).state }
-    catch (reason) { error.value = reason instanceof Error ? reason.message : '命令执行失败' }
+    catch (reason) {
+      error.value = axios.isAxiosError(reason)
+        ? String(reason.response?.data?.detail || reason.message)
+        : reason instanceof Error ? reason.message : '命令执行失败'
+    }
     finally { busy.value = false }
   }
 
-  return { state, socketConnected, busy, error, initialize, disconnect: () => socket.disconnect(), command }
+  async function streamChassis(linear: number, angular: number) {
+    if (streamInFlight) return
+    streamInFlight = true
+    try {
+      state.value = (await robotApi.moveChassis(linear, angular)).state
+      error.value = ''
+    } catch (reason) {
+      error.value = axios.isAxiosError(reason)
+        ? String(reason.response?.data?.detail || reason.message)
+        : reason instanceof Error ? reason.message : '底盘控制失败'
+    } finally {
+      streamInFlight = false
+    }
+  }
+
+  async function stopChassisStream() {
+    try {
+      state.value = (await robotApi.stopChassis()).state
+    } catch (reason) {
+      error.value = axios.isAxiosError(reason)
+        ? String(reason.response?.data?.detail || reason.message)
+        : '底盘停止失败'
+    }
+  }
+
+  return { state, socketConnected, busy, error, initialize, disconnect: () => socket.disconnect(), command, streamChassis, stopChassisStream }
 })

@@ -20,6 +20,7 @@ class ROS2NodeAdapter:
         self._running = False
         self._last_odom = 0.0
         self._last_command = 0.0
+        self._last_watchdog = 0.0
         self._velocity = (0.0, 0.0)
         self._state = ChassisState()
         self._map = MapSnapshot()
@@ -38,6 +39,7 @@ class ROS2NodeAdapter:
             from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
             from rclpy.time import Time
             from sensor_msgs.msg import BatteryState
+            from std_msgs.msg import Bool
             from tf2_ros import Buffer, TransformListener
         except ImportError as exc:
             raise RuntimeError("ROS2 Python modules unavailable; use the ROS2 Python 3.10 launcher") from exc
@@ -52,6 +54,7 @@ class ROS2NodeAdapter:
         self._tf_listener = TransformListener(self._tf_buffer, self._node)
         self._node.create_subscription(Odometry, self.config.odom_topic, self._on_odom, qos_profile_sensor_data)
         self._node.create_subscription(BatteryState, self.config.battery_topic, self._on_battery, qos_profile_sensor_data)
+        self._node.create_subscription(Bool, self.config.watchdog_status_topic, self._on_watchdog, 10)
         map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._node.create_subscription(OccupancyGrid, self.config.map_topic, self._on_map, map_qos)
         self._node.create_subscription(Path, self.config.plan_topic, self._on_path, 10)
@@ -79,6 +82,8 @@ class ROS2NodeAdapter:
     def set_velocity(self, linear: float, angular: float) -> None:
         if not self.config.allow_motion_commands:
             raise MotionControlDisabled("real motion commands are locked by configuration")
+        if (abs(linear) > 0.001 or abs(angular) > 0.001) and not self.motion_commands_ready():
+            raise MotionControlDisabled("工控机速度看门狗未就绪，请先开启底盘模块")
         with self._lock:
             self._velocity = (linear, angular)
             self._last_command = time.monotonic()
@@ -114,6 +119,10 @@ class ROS2NodeAdapter:
             self._state.battery_voltage = float(message.voltage)
             percentage = float(message.percentage)
             self._state.battery_percentage = percentage if math.isfinite(percentage) else None
+
+    def _on_watchdog(self, message: Any) -> None:
+        with self._lock:
+            self._last_watchdog = time.monotonic() if bool(message.data) else 0.0
 
     def _update_map_pose(self) -> None:
         try:
@@ -156,3 +165,11 @@ class ROS2NodeAdapter:
 
     def is_running(self) -> bool:
         return self._running
+
+    def motion_commands_ready(self) -> bool:
+        with self._lock:
+            return (
+                self.config.allow_motion_commands
+                and self._running
+                and time.monotonic() - self._last_watchdog < self.config.watchdog_timeout
+            )

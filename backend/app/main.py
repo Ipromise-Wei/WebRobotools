@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.adapters.ros2.node import MotionControlDisabled, ROS2NodeAdapter
-from app.api import arm, chassis, gripper, system, visualization
+from app.api import arm, chassis, gripper, runtime, system, visualization
 from app.controllers.chassis.mini_v3 import MiniV3ChassisController
 from app.controllers.mock.arm import MockArm
 from app.controllers.mock.gripper import MockGripper
@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.logger import configure_logging
 from app.core.map_manager import MapManager
 from app.core.robot_manager import RobotManager
+from app.core.remote_runtime import RemoteRuntimeManager
 from app.core.state_manager import StateManager
 from app.core.visualization_service import VisualizationService
 from app.websocket.manager import map_websocket_endpoint, websocket_endpoint
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.server.log_level)
     state_manager = StateManager()
     map_manager = MapManager()
+    remote_runtime = RemoteRuntimeManager(settings.remote_runtime)
     adapter: ROS2NodeAdapter | None = None
     if settings.robot.mode == "ros2":
         adapter = ROS2NodeAdapter(settings.ros2)
@@ -41,6 +43,8 @@ async def lifespan(app: FastAPI):
     app.state.state_manager = state_manager
     app.state.map_manager = map_manager
     app.state.robot_manager = robot_manager
+    app.state.remote_runtime = remote_runtime
+    app.state.ros2_adapter = adapter
     await robot_manager.initialize()
     await visualization_service.start()
     try:
@@ -70,6 +74,7 @@ app.include_router(chassis.router, prefix="/api/chassis", tags=["chassis"])
 app.include_router(arm.router, prefix="/api/arm", tags=["arm"])
 app.include_router(gripper.router, prefix="/api/gripper", tags=["gripper"])
 app.include_router(visualization.router, prefix="/api/visualization", tags=["visualization"])
+app.include_router(runtime.router, prefix="/api/runtime", tags=["runtime"])
 
 
 @app.exception_handler(MotionControlDisabled)

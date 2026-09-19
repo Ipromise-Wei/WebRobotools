@@ -12,11 +12,16 @@ router = APIRouter()
 @router.get("/config", response_model=VisualizationConfig)
 async def config(request: Request) -> VisualizationConfig:
     settings = request.app.state.settings
+    adapter = request.app.state.ros2_adapter
     return VisualizationConfig(
         camera_stream_url=settings.visualization.camera_stream_url,
         map_topic=settings.ros2.map_topic,
         plan_topic=settings.ros2.plan_topic,
-        motion_commands_enabled=settings.ros2.allow_motion_commands,
+        motion_commands_enabled=(
+            settings.ros2.allow_motion_commands
+            and adapter is not None
+            and adapter.motion_commands_ready()
+        ),
     )
 
 

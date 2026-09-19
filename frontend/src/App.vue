@@ -14,8 +14,8 @@ onBeforeUnmount(() => store.disconnect())
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <span class="brand-mark">R</span>
-        <div><strong>ROBOT ONE</strong><small>CONTROL STATION</small></div>
+        <span class="brand-mark">AI</span>
+        <div><strong>HZAU@AIOT</strong><small>农业AI机器人协同平台</small></div>
       </div>
       <nav>
         <RouterLink to="/">总览</RouterLink>
@@ -30,7 +30,7 @@ onBeforeUnmount(() => store.disconnect())
     </aside>
     <main>
       <header class="topbar">
-        <div><span class="eyebrow">{{ store.state.system.mode.toUpperCase() }} ENVIRONMENT</span><h1>移动操作机器人</h1></div>
+        <div><span class="eyebrow">{{ store.state.system.mode.toUpperCase() }} · ROBOT COLLABORATION</span><h1>HZAU@AIOT农业AI机器人协同工作平台</h1></div>
         <time>{{ new Date(store.state.updated_at).toLocaleString('zh-CN') }}</time>
       </header>
       <p v-if="store.error" class="alert">{{ store.error }}</p>

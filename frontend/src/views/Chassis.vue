@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted } from 'vue'
 import CameraPanel from '@/components/CameraPanel.vue'
 import ChassisControl from '@/components/ChassisControl.vue'
 import MapCanvas from '@/components/MapCanvas.vue'
+import RuntimeControl from '@/components/RuntimeControl.vue'
 import { useRobotStore } from '@/stores/robot'
 import { useVisualizationStore } from '@/stores/visualization'
 
@@ -44,11 +45,12 @@ onBeforeUnmount(() => visual.disconnect())
       </div>
 
       <aside class="chassis-console">
+        <RuntimeControl />
         <div class="console-title"><div><span class="eyebrow">MANUAL DRIVE</span><h3>运动控制</h3></div><i :class="{ online: store.state.chassis.connected }"></i></div>
         <p v-if="store.state.system.mode === 'ros2' && !visual.config.motion_commands_enabled" class="safety-lock">
-          <strong>安全锁定</strong><span>完成超时停车保护后启用实车指令</span>
+          <strong>等待安全链路</strong><span>请先开启底盘模块并等待速度看门狗上线</span>
         </p>
-        <ChassisControl />
+        <ChassisControl :enabled="store.state.system.mode !== 'ros2' || visual.config.motion_commands_enabled" />
       </aside>
     </div>
   </div>
