@@ -5,8 +5,8 @@ from app.models.gripper import GripperState
 
 
 class MockGripper(GripperController):
-    def __init__(self) -> None:
-        self._state = GripperState(connected=True, status="opened", position=1.0)
+    def __init__(self, connected: bool = True) -> None:
+        self._state = GripperState(connected=connected, status="opened", position=1.0)
         self._force = 0.5
 
     async def open(self) -> None:
@@ -35,4 +35,3 @@ class MockGripper(GripperController):
 
     async def is_connected(self) -> bool:
         return self._state.connected
-

@@ -5,8 +5,8 @@ from app.models.arm import ArmState, Pose
 
 
 class MockArm(ArmController):
-    def __init__(self) -> None:
-        self._state = ArmState(connected=True)
+    def __init__(self, connected: bool = True) -> None:
+        self._state = ArmState(connected=connected)
 
     async def move_joint(self, joint: int, position: float) -> None:
         self._state.joints[joint - 1] = position
@@ -34,4 +34,3 @@ class MockArm(ArmController):
 
     async def is_connected(self) -> bool:
         return self._state.connected
-

@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 
 from app.controllers.base.arm_base import ArmController
 from app.controllers.base.chassis_base import ChassisController
@@ -20,13 +21,20 @@ class RobotManager:
         arm: ArmController,
         gripper: GripperController,
         state_manager: StateManager,
+        mode: str = "mock",
+        ros2_status: Callable[[], bool] | None = None,
+        poll_interval: float = 0.2,
     ) -> None:
         self.chassis = chassis
         self.arm = arm
         self.gripper = gripper
         self.state_manager = state_manager
+        self.mode = mode
+        self._ros2_status = ros2_status or (lambda: False)
+        self._poll_interval = poll_interval
         self._command_lock = asyncio.Lock()
         self._running = False
+        self._poll_task: asyncio.Task[None] | None = None
 
     @classmethod
     def create_mock(cls, state_manager: StateManager) -> "RobotManager":
@@ -35,8 +43,16 @@ class RobotManager:
     async def initialize(self) -> None:
         self._running = True
         await self._sync_state()
+        if self.mode == "ros2":
+            self._poll_task = asyncio.create_task(self._poll())
 
     async def shutdown(self) -> None:
+        if self._poll_task:
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except asyncio.CancelledError:
+                pass
         async with self._command_lock:
             await asyncio.gather(
                 self.chassis.stop(), self.arm.stop(), self.gripper.stop()
@@ -46,13 +62,19 @@ class RobotManager:
 
     async def _sync_state(self) -> RobotState:
         state = RobotState(
-            system=SystemState(backend=self._running, ros2=False, mode="mock"),
+            system=SystemState(backend=self._running, ros2=self._ros2_status(), mode=self.mode),
             chassis=await self.chassis.get_state(),
             arm=await self.arm.get_state(),
             gripper=await self.gripper.get_state(),
         )
         await self.state_manager.replace(state)
         return state
+
+    async def _poll(self) -> None:
+        while self._running:
+            await asyncio.sleep(self._poll_interval)
+            async with self._command_lock:
+                await self._sync_state()
 
     async def get_state(self) -> RobotState:
         _, state = await self.state_manager.snapshot()
@@ -102,4 +124,3 @@ class RobotManager:
         async with self._command_lock:
             await self.gripper.stop()
             return await self._sync_state()
-

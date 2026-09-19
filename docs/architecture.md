@@ -19,6 +19,17 @@ WebSocket /ws/robot
 Pinia Store ──► 页面实时更新
 ```
 
+工控机可视化链路：
+
+```text
+工控机 start_mapping.sh
+  ├─ /odom、/battery_state ──► StateManager ──► /ws/robot
+  ├─ /map、/plan ───────────► MapManager ────► /ws/map
+  └─ TF map→base_link ──────► 地图机器人位姿
+```
+
+地图和摄像头直接嵌入移动底盘页面，不创建单独的可视化页面。
+
 ## 分层约束
 
 - API 层只负责输入校验和调用 `RobotManager`。
@@ -31,4 +42,3 @@ Pinia Store ──► 页面实时更新
 ## 并发模型
 
 设备命令由 `RobotManager` 的异步锁串行处理，避免并发命令生成相互覆盖的状态快照。每次命令完成后统一读取三类 Controller 状态并原子发布。
-

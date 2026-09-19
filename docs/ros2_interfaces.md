@@ -1,4 +1,14 @@
-# ROS2 接口规划
+# ROS2 接口
 
-Phase 0/1 不绑定真实 Topic、Service 或 Action。Phase 2 调研确认设备接口后，所有 rclpy 节点、发布订阅、服务与 Action 客户端应实现于 `backend/app/adapters/ros2/`，Controller 不应向 API 层泄露 ROS2 类型。
+已根据工控机 `/home/hzauaiot/songwei/ChassisControl` 与 `start_mapping.sh` 确认：
 
+| 方向 | Topic/TF | 类型 | 用途 |
+|---|---|---|---|
+| 订阅 | `/odom` | `nav_msgs/msg/Odometry` | 速度与里程计 |
+| 订阅 | `/battery_state` | `sensor_msgs/msg/BatteryState` | 电池状态 |
+| 订阅 | `/map` | `nav_msgs/msg/OccupancyGrid` | SLAM 地图 |
+| 订阅 | `/plan` | `nav_msgs/msg/Path` | Nav2 全局路径 |
+| 查询 | `map → base_link` | TF2 | 地图中的机器人位姿 |
+| 发布（锁定） | `/cmd_vel` | `geometry_msgs/msg/Twist` | 底盘运动指令 |
+
+Topic 名称可在 `backend/config/config.yaml` 修改。工控机导航脚本使用 `ROS_DOMAIN_ID=30`，Web 后端必须使用相同 Domain。真实运动命令默认关闭。

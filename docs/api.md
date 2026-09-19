@@ -17,6 +17,9 @@
 | POST | `/api/gripper/open` | 打开夹爪 |
 | POST | `/api/gripper/close` | 关闭夹爪 |
 | POST | `/api/gripper/stop` | 停止夹爪 |
+| GET | `/api/visualization/config` | 地图、路径、相机及运动锁配置 |
+| GET | `/api/visualization/map` | 当前占据栅格与 Nav2 路径 |
 
 WebSocket `/ws/robot` 建立后立即发送 `robot_state` 完整快照。状态版本变化时发送新的完整快照，空闲时发送 `heartbeat`。
 
+WebSocket `/ws/map` 独立推送 `/map` 与 `/plan` 组合快照，避免大尺寸栅格数据阻塞普通状态消息。

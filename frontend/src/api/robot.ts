@@ -1,5 +1,6 @@
 import axios from 'axios'
 import type { Pose, RobotState } from '@/stores/robot'
+import type { MapSnapshot, VisualizationConfig } from '@/stores/visualization'
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_BASE_URL || '/api', timeout: 5000 })
 
@@ -19,5 +20,6 @@ export const robotApi = {
   openGripper: () => api.post<CommandResponse>('/gripper/open').then((response) => response.data),
   closeGripper: () => api.post<CommandResponse>('/gripper/close').then((response) => response.data),
   stopGripper: () => api.post<CommandResponse>('/gripper/stop').then((response) => response.data),
+  visualizationConfig: () => api.get<VisualizationConfig>('/visualization/config').then((response) => response.data),
+  map: () => api.get<MapSnapshot>('/visualization/map').then((response) => response.data),
 }
-

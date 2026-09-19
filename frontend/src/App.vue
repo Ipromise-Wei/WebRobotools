@@ -30,7 +30,7 @@ onBeforeUnmount(() => store.disconnect())
     </aside>
     <main>
       <header class="topbar">
-        <div><span class="eyebrow">MOCK ENVIRONMENT</span><h1>移动操作机器人</h1></div>
+        <div><span class="eyebrow">{{ store.state.system.mode.toUpperCase() }} ENVIRONMENT</span><h1>移动操作机器人</h1></div>
         <time>{{ new Date(store.state.updated_at).toLocaleString('zh-CN') }}</time>
       </header>
       <p v-if="store.error" class="alert">{{ store.error }}</p>
@@ -38,4 +38,3 @@ onBeforeUnmount(() => store.disconnect())
     </main>
   </div>
 </template>
-

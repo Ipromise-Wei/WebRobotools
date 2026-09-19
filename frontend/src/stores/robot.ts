@@ -6,7 +6,7 @@ import { RobotSocket } from '@/websocket/robotSocket'
 export interface Pose { x: number; y: number; z: number; rx: number; ry: number; rz: number }
 export interface RobotState {
   system: { backend: boolean; ros2: boolean; mode: 'mock' | 'ros2' }
-  chassis: { connected: boolean; linear_velocity: number; angular_velocity: number; moving: boolean }
+  chassis: { connected: boolean; linear_velocity: number; angular_velocity: number; moving: boolean; x: number; y: number; yaw: number; odom_received: boolean; map_x: number; map_y: number; map_yaw: number; map_pose_received: boolean; battery_percentage: number | null; battery_voltage: number | null }
   arm: { connected: boolean; moving: boolean; joints: number[]; pose: Pose }
   gripper: { connected: boolean; status: 'opened' | 'closed' | 'stopped'; position: number; moving: boolean }
   updated_at: string
@@ -14,7 +14,7 @@ export interface RobotState {
 
 const emptyState: RobotState = {
   system: { backend: false, ros2: false, mode: 'mock' },
-  chassis: { connected: false, linear_velocity: 0, angular_velocity: 0, moving: false },
+  chassis: { connected: false, linear_velocity: 0, angular_velocity: 0, moving: false, x: 0, y: 0, yaw: 0, odom_received: false, map_x: 0, map_y: 0, map_yaw: 0, map_pose_received: false, battery_percentage: null, battery_voltage: null },
   arm: { connected: false, moving: false, joints: [0, 0, 0, 0, 0, 0], pose: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 } },
   gripper: { connected: false, status: 'stopped', position: 0, moving: false },
   updated_at: new Date().toISOString(),
@@ -46,4 +46,3 @@ export const useRobotStore = defineStore('robot', () => {
 
   return { state, socketConnected, busy, error, initialize, disconnect: () => socket.disconnect(), command }
 })
-

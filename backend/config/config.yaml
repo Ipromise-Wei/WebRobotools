@@ -6,3 +6,22 @@ server:
   cors_origins:
     - http://localhost:5173
     - http://127.0.0.1:5173
+
+robot:
+  mode: ros2
+  state_poll_interval: 0.2
+
+# start_mapping.sh uses ROS_DOMAIN_ID=30. Set the same value before starting this backend.
+ros2:
+  node_name: robot_web_control
+  cmd_vel_topic: /cmd_vel
+  odom_topic: /odom
+  battery_topic: /battery_state
+  map_topic: /map
+  plan_topic: /plan
+  # Keep locked until the industrial-PC driver has a command-timeout watchdog.
+  allow_motion_commands: false
+  command_timeout: 0.5
+
+visualization:
+  camera_stream_url: ""

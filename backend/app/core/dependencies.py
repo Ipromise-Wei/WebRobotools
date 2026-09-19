@@ -2,6 +2,7 @@ from fastapi import Request
 
 from app.core.robot_manager import RobotManager
 from app.core.state_manager import StateManager
+from app.core.map_manager import MapManager
 
 
 async def get_robot_manager(request: Request) -> RobotManager:
@@ -10,3 +11,7 @@ async def get_robot_manager(request: Request) -> RobotManager:
 
 async def get_state_manager(request: Request) -> StateManager:
     return request.app.state.state_manager
+
+
+async def get_map_manager(request: Request) -> MapManager:
+    return request.app.state.map_manager
