@@ -22,6 +22,7 @@ class RemoteRuntimeManager:
         self._agent_source = Path(__file__).resolve().parents[1] / "runtime_agent.py"
         self._watchdog_source = Path(__file__).resolve().parents[1] / "cmd_vel_watchdog.py"
         self._chassis_runtime_source = Path(__file__).resolve().parents[1] / "chassis_runtime.sh"
+        self._arm_bridge_source = Path(__file__).resolve().parents[1] / "arm_tcp_bridge.py"
 
     @property
     def target(self) -> str:
@@ -56,6 +57,9 @@ class RemoteRuntimeManager:
     async def _deploy_agent(self) -> None:
         remote_dir = str(Path(self.settings.agent_path).parent)
         sources = [
+            # Deploy the arm bridge first. Arm state polling starts with the Web
+            # service and must never depend on the longer runtime-agent update.
+            (self._arm_bridge_source, f"{remote_dir}/arm_tcp_bridge.py"),
             (self._agent_source, self.settings.agent_path),
             (self._watchdog_source, f"{remote_dir}/cmd_vel_watchdog.py"),
             (self._chassis_runtime_source, f"{remote_dir}/chassis_runtime.sh"),
@@ -69,12 +73,25 @@ class RemoteRuntimeManager:
                 f"{self.target}:{destination}",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=15)
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=15
+                )
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+                raise RemoteRuntimeError(
+                    f"deploying {source.name} to the industrial PC timed out"
+                ) from None
             if process.returncode:
                 detail = stderr.decode(errors="replace").strip() or stdout.decode(errors="replace").strip()
                 raise RemoteRuntimeError(detail or f"failed to deploy {source.name}")
         paths = " ".join(shlex.quote(destination) for _, destination in sources)
         await self._execute(f"chmod 700 {paths}")
+
+    async def ensure_deployed(self) -> None:
+        async with self._lock:
+            await self._deploy_agent()
 
     def _manifest(self) -> str:
         payload = {

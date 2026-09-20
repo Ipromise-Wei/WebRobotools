@@ -27,6 +27,48 @@ ros2:
 
 visualization:
   camera_stream_url: ""
+  realsense:
+    enabled: true
+    source: industrial_pc
+    serial: "935523021292"
+    video_device: /dev/video4
+    input_format: yuyv422
+    width: 1280
+    height: 720
+    fps: 30
+    jpeg_quality: 82
+    retry_interval_s: 2.0
+
+# RealMan RML63 true-hardware control, aligned with grasp_studio/settings.json.
+# Connecting and polling are read-only; motion is exposed only through typed Web APIs.
+arm:
+  enabled: true
+  transport: industrial_pc
+  host: 192.168.1.20
+  port: 8080
+  network_interface: enp4s0
+  timeout_s: 2.0
+  allow_motion_commands: true
+  expected_tool: Arm_Tip
+  collision_level: 8
+  joint_speed_percent: 5
+  pose_speed_percent: 5
+  workspace_min_m: [-1.2, -1.2, 0.05]
+  workspace_max_m: [1.2, 1.2, 1.0]
+  clearance_m: 0.0
+  max_pose_segment_m: 0.8
+  keepout_enabled: true
+  keepout_min_m: [0.0, 0.0, 0.0]
+  keepout_max_m: [0.1, 0.1, 0.1]
+  standby_joints_deg: [178.0, 37.258, -65.159, 4.531, -107.568, 6.608]
+
+gripper:
+  enabled: true
+  allow_commands: true
+  open_io: 1
+  close_io: 2
+  active_level: 0
+  pulse_s: 1.0
 
 # Web-managed ROS2 runtime on the industrial PC. Commands are defined here and
 # exposed only as start/stop/restart actions; the API cannot execute arbitrary commands.

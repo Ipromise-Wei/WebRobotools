@@ -23,6 +23,23 @@ class MapSnapshot(BaseModel):
 
 class VisualizationConfig(BaseModel):
     camera_stream_url: str = ""
+    camera_enabled: bool = False
+    camera_connected: bool = False
+    camera_serial: str = ""
+    camera_error: str = ""
     map_topic: str
     plan_topic: str
     motion_commands_enabled: bool
+
+
+class CameraStreamStatus(BaseModel):
+    enabled: bool = False
+    source: str = "local"
+    connected: bool = False
+    serial: str = ""
+    width: int = 0
+    height: int = 0
+    fps: int = 0
+    sequence: int = 0
+    error: str = ""
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

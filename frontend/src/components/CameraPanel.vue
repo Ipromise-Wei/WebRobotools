@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-defineProps<{ url: string }>()
+import { ref, watch } from 'vue'
+const props = defineProps<{ url: string; connected?: boolean; error?: string }>()
 const failed = ref(false)
+watch(() => [props.url, props.connected], () => { if (props.url) failed.value = false })
 </script>
-<template><section class="panel camera-panel"><div class="section-title"><h2>实时摄像头</h2><span>{{ url && !failed ? 'LIVE' : 'WAITING' }}</span></div><div class="visual-stage"><img v-if="url && !failed" :src="url" alt="机器人摄像头" @error="failed = true" /><div v-else class="visual-empty"><b>CAM</b><p>尚未配置视频流</p><small>等待相机功能包与 Web 视频接口</small></div></div></section></template>
+<template><section class="panel camera-panel"><div class="section-title"><h2>RealSense 实时画面</h2><span>{{ connected && !failed ? 'LIVE' : 'WAITING' }}</span></div><div class="visual-stage"><img v-if="url && !failed" :src="url" alt="RealSense 彩色画面" @load="failed = false" @error="failed = true" /><div v-if="!url || failed || !connected" class="visual-empty camera-waiting"><b>RS</b><p>{{ error || (url ? '正在连接 RealSense' : 'RealSense 视频流未启用') }}</p><small>仅显示真实相机画面，不生成模拟视频</small></div></div></section></template>

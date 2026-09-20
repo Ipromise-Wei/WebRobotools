@@ -8,7 +8,7 @@ export interface Pose { x: number; y: number; z: number; rx: number; ry: number;
 export interface RobotState {
   system: { backend: boolean; ros2: boolean; mode: 'mock' | 'ros2' }
   chassis: { connected: boolean; linear_velocity: number; angular_velocity: number; moving: boolean; x: number; y: number; yaw: number; odom_received: boolean; map_x: number; map_y: number; map_yaw: number; map_pose_received: boolean; battery_percentage: number | null; battery_voltage: number | null }
-  arm: { connected: boolean; moving: boolean; joints: number[]; pose: Pose }
+  arm: { connected: boolean; moving: boolean; joints: number[]; pose: Pose; work_frame: string; work_frame_safe: boolean; tool_frame: string; error: string }
   gripper: { connected: boolean; status: 'opened' | 'closed' | 'stopped'; position: number; moving: boolean }
   updated_at: string
 }
@@ -16,7 +16,7 @@ export interface RobotState {
 const emptyState: RobotState = {
   system: { backend: false, ros2: false, mode: 'mock' },
   chassis: { connected: false, linear_velocity: 0, angular_velocity: 0, moving: false, x: 0, y: 0, yaw: 0, odom_received: false, map_x: 0, map_y: 0, map_yaw: 0, map_pose_received: false, battery_percentage: null, battery_voltage: null },
-  arm: { connected: false, moving: false, joints: [0, 0, 0, 0, 0, 0], pose: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 } },
+  arm: { connected: false, moving: false, joints: [0, 0, 0, 0, 0, 0], pose: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 }, work_frame: '', work_frame_safe: false, tool_frame: '', error: '' },
   gripper: { connected: false, status: 'stopped', position: 0, moving: false },
   updated_at: new Date().toISOString(),
 }
@@ -25,27 +25,57 @@ export const useRobotStore = defineStore('robot', () => {
   const state = ref<RobotState>(emptyState)
   const socketConnected = ref(false)
   const busy = ref(false)
-  let streamInFlight = false
   const error = ref('')
+  let streamInFlight = false
+  let statusRetry: number | undefined
   const socket = new RobotSocket<RobotState>(
-    (nextState) => { state.value = nextState },
-    (connected) => { socketConnected.value = connected },
+    (nextState) => {
+      state.value = nextState
+      error.value = ''
+    },
+    (connected) => {
+      socketConnected.value = connected
+      if (connected) error.value = ''
+    },
   )
 
+  async function refreshStatus() {
+    try {
+      state.value = await robotApi.status()
+      error.value = ''
+    }
+    catch {
+      if (!socketConnected.value) error.value = '无法连接后端，请确认服务已启动。'
+    }
+  }
+
   async function initialize() {
-    try { state.value = await robotApi.status() }
-    catch { error.value = '无法连接后端，请确认服务已启动。' }
     socket.connect()
+    await refreshStatus()
+    if (statusRetry) window.clearInterval(statusRetry)
+    statusRetry = window.setInterval(() => {
+      if (!socketConnected.value) void refreshStatus()
+    }, 2000)
+  }
+
+  function disconnect() {
+    if (statusRetry) window.clearInterval(statusRetry)
+    statusRetry = undefined
+    socket.disconnect()
   }
 
   async function command(action: () => Promise<{ state: RobotState }>) {
     busy.value = true
     error.value = ''
-    try { state.value = (await action()).state }
+    try {
+      state.value = (await action()).state
+      return true
+    }
     catch (reason) {
       error.value = axios.isAxiosError(reason)
         ? String(reason.response?.data?.detail || reason.message)
         : reason instanceof Error ? reason.message : '命令执行失败'
+      return false
     }
     finally { busy.value = false }
   }
@@ -75,5 +105,16 @@ export const useRobotStore = defineStore('robot', () => {
     }
   }
 
-  return { state, socketConnected, busy, error, initialize, disconnect: () => socket.disconnect(), command, streamChassis, stopChassisStream }
+  async function stopManipulator() {
+    error.value = ''
+    try {
+      state.value = (await robotApi.emergencyStopManipulator()).state
+    } catch (reason) {
+      error.value = axios.isAxiosError(reason)
+        ? String(reason.response?.data?.detail || reason.message)
+        : '机械臂停止失败，请使用现场硬件急停'
+    }
+  }
+
+  return { state, socketConnected, busy, error, initialize, disconnect, command, streamChassis, stopChassisStream, stopManipulator }
 })

@@ -55,7 +55,8 @@ class RobotManager:
                 pass
         async with self._command_lock:
             await asyncio.gather(
-                self.chassis.stop(), self.arm.stop(), self.gripper.stop()
+                self.chassis.stop(), self.arm.stop(), self.gripper.stop(),
+                return_exceptions=True,
             )
             self._running = False
             await self._sync_state()
@@ -90,25 +91,39 @@ class RobotManager:
             await self.chassis.stop()
             return await self._sync_state()
 
-    async def move_arm_joint(self, joint: int, position: float) -> RobotState:
+    async def move_arm_joint(self, joint: int, position: float, speed: int | None = None) -> RobotState:
         async with self._command_lock:
-            await self.arm.move_joint(joint, position)
+            await self.arm.move_joint(joint, position, speed)
             return await self._sync_state()
 
-    async def move_arm_joints(self, positions: list[float]) -> RobotState:
+    async def move_arm_joints(self, positions: list[float], speed: int | None = None) -> RobotState:
         async with self._command_lock:
-            await self.arm.move_joints(positions)
+            await self.arm.move_joints(positions, speed)
             return await self._sync_state()
 
-    async def move_arm_pose(self, pose: Pose) -> RobotState:
+    async def move_arm_pose(self, pose: Pose, speed: int | None = None) -> RobotState:
         async with self._command_lock:
-            await self.arm.move_pose(pose)
+            await self.arm.move_pose(pose, speed)
             return await self._sync_state()
 
     async def stop_arm(self) -> RobotState:
         async with self._command_lock:
             await self.arm.stop()
             return await self._sync_state()
+
+    async def stop_manipulator(self) -> RobotState:
+        # Do not queue the stop request behind a higher-level command lock. The
+        # shared hardware client still serializes wire access, but can send the
+        # stop as soon as the in-flight controller packet is acknowledged.
+        results = await asyncio.gather(
+            self.arm.stop(), self.gripper.stop(), return_exceptions=True
+        )
+        async with self._command_lock:
+            errors = [str(result) for result in results if isinstance(result, Exception)]
+            state = await self._sync_state()
+            if errors:
+                raise RuntimeError("；".join(errors))
+            return state
 
     async def open_gripper(self) -> RobotState:
         async with self._command_lock:

@@ -1,9 +1,10 @@
 from functools import lru_cache
+import math
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ServerSettings(BaseModel):
@@ -32,8 +33,94 @@ class ROS2Settings(BaseModel):
     watchdog_timeout: float = Field(default=1.0, ge=0.2, le=5.0)
 
 
+class RealSenseSettings(BaseModel):
+    enabled: bool = False
+    source: Literal["local", "industrial_pc"] = "local"
+    serial: str = ""
+    video_device: str = Field(default="/dev/video4", pattern=r"^/dev/video[0-9]+$")
+    input_format: Literal["yuyv422", "mjpeg"] = "yuyv422"
+    width: int = Field(default=1280, ge=320, le=1920)
+    height: int = Field(default=720, ge=240, le=1080)
+    fps: int = Field(default=30, ge=1, le=60)
+    jpeg_quality: int = Field(default=82, ge=40, le=95)
+    retry_interval_s: float = Field(default=2.0, ge=0.5, le=30)
+
+
 class VisualizationSettings(BaseModel):
     camera_stream_url: str = ""
+    realsense: RealSenseSettings = Field(default_factory=RealSenseSettings)
+
+
+class ArmSettings(BaseModel):
+    enabled: bool = False
+    transport: Literal["direct", "industrial_pc"] = "direct"
+    host: str = Field(default="192.168.1.20", min_length=1)
+    port: int = Field(default=8080, ge=1, le=65535)
+    network_interface: str = Field(
+        default="",
+        max_length=15,
+        pattern=r"^[A-Za-z0-9_.:-]*$",
+    )
+    timeout_s: float = Field(default=2.0, ge=0.2, le=10)
+    allow_motion_commands: bool = False
+    expected_tool: str = ""
+    collision_level: int = Field(default=8, ge=1, le=8)
+    joint_speed_percent: int = Field(default=5, ge=1, le=100)
+    pose_speed_percent: int = Field(default=5, ge=1, le=100)
+    workspace_min_m: list[float] = Field(default_factory=lambda: [-0.8, -0.8, 0.05])
+    workspace_max_m: list[float] = Field(default_factory=lambda: [0.8, 0.8, 1.0])
+    clearance_m: float = Field(default=0.0, ge=0, le=0.2)
+    max_pose_segment_m: float = Field(default=0.8, ge=0.02, le=0.8)
+    keepout_enabled: bool = False
+    keepout_min_m: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+    keepout_max_m: list[float] = Field(default_factory=lambda: [0.1, 0.1, 0.1])
+    standby_joints_deg: list[float] = Field(
+        default_factory=lambda: [178.0, 37.258, -65.159, 4.531, -107.568, 6.608]
+    )
+
+    @field_validator(
+        "workspace_min_m", "workspace_max_m", "keepout_min_m", "keepout_max_m"
+    )
+    @classmethod
+    def validate_workspace_vector(cls, value: list[float]) -> list[float]:
+        if len(value) != 3 or not all(math.isfinite(item) for item in value):
+            raise ValueError("机械臂工作空间必须包含三个有限数值")
+        return value
+
+    @field_validator("standby_joints_deg")
+    @classmethod
+    def validate_standby_joints(cls, value: list[float]) -> list[float]:
+        if len(value) != 6 or not all(math.isfinite(item) for item in value):
+            raise ValueError("机械臂待命位必须包含六个有限关节角")
+        return value
+
+    @model_validator(mode="after")
+    def validate_workspace_order(self) -> "ArmSettings":
+        if any(low >= high for low, high in zip(self.workspace_min_m, self.workspace_max_m)):
+            raise ValueError("机械臂工作空间下限必须小于上限")
+        if any(low >= high for low, high in zip(self.keepout_min_m, self.keepout_max_m)):
+            raise ValueError("机械臂禁止区域下限必须小于上限")
+        if any(
+            high - low <= 2 * self.clearance_m
+            for low, high in zip(self.workspace_min_m, self.workspace_max_m)
+        ):
+            raise ValueError("机械臂工作空间过小，无法应用安全余量")
+        return self
+
+
+class GripperSettings(BaseModel):
+    enabled: bool = False
+    allow_commands: bool = False
+    open_io: int = Field(default=1, ge=1, le=2)
+    close_io: int = Field(default=2, ge=1, le=2)
+    active_level: int = Field(default=0, ge=0, le=1)
+    pulse_s: float = Field(default=1.0, ge=0.1, le=10)
+
+    @model_validator(mode="after")
+    def validate_channels(self) -> "GripperSettings":
+        if self.open_io == self.close_io:
+            raise ValueError("夹爪张开与闭合 IO 不能使用同一通道")
+        return self
 
 
 class RuntimeTaskSettings(BaseModel):
@@ -63,7 +150,30 @@ class Settings(BaseModel):
     robot: RobotSettings = Field(default_factory=RobotSettings)
     ros2: ROS2Settings = Field(default_factory=ROS2Settings)
     visualization: VisualizationSettings = Field(default_factory=VisualizationSettings)
+    arm: ArmSettings = Field(default_factory=ArmSettings)
+    gripper: GripperSettings = Field(default_factory=GripperSettings)
     remote_runtime: RemoteRuntimeSettings = Field(default_factory=RemoteRuntimeSettings)
+
+    @model_validator(mode="after")
+    def validate_arm_transport(self) -> "Settings":
+        if self.arm.enabled and self.arm.transport == "industrial_pc":
+            if not self.arm.network_interface.strip():
+                raise ValueError("工控机机械臂传输必须配置 network_interface")
+            if (
+                not self.remote_runtime.enabled
+                or not self.remote_runtime.host.strip()
+                or not self.remote_runtime.user.strip()
+            ):
+                raise ValueError("工控机机械臂传输必须启用并配置 remote_runtime SSH")
+        camera = self.visualization.realsense
+        if camera.enabled and camera.source == "industrial_pc":
+            if (
+                not self.remote_runtime.enabled
+                or not self.remote_runtime.host.strip()
+                or not self.remote_runtime.user.strip()
+            ):
+                raise ValueError("工控机 RealSense 采集必须启用并配置 remote_runtime SSH")
+        return self
 
 
 @lru_cache

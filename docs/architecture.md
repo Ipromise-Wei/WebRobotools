@@ -31,6 +31,11 @@ Web 运行面板 ──► Runtime API ──► RemoteRuntimeManager ──SSH�
   ├─ /odom、/battery_state ──► StateManager ──► /ws/robot
   ├─ /map、/plan ───────────► MapManager ────► /ws/map
   └─ TF map→base_link ──────► 地图机器人位姿
+
+机械臂页面 ──REST──► RobotManager ──► RealManArmController ──SSH stdio──► 工控机桥接器
+                                      └► RealManGripperController          └─ enp4s0 ─► RML63 / 工具 IO
+
+工控机 RealSense ──V4L2/FFmpeg──► SSH JPEG 管道 ──► Web 单实例帧缓存 ──MJPEG──► 底盘页 / 机械臂页
 ```
 
 地图和摄像头直接嵌入移动底盘页面，不创建单独的可视化页面。
@@ -38,7 +43,7 @@ Web 运行面板 ──► Runtime API ──► RemoteRuntimeManager ──SSH�
 ## 分层约束
 
 - API 层只负责输入校验，并调用对应的管理服务。
-- 每类设备由独立 Controller 接口描述，Mock 与未来真实实现遵循相同契约。
+- 每类设备由独立 Controller 接口描述；机械臂工作站仅解锁 RML63 真机实现。
 - `RobotManager` 负责协调设备命令及生成统一状态快照。
 - `StateManager` 原子替换状态、维护版本并通知 WebSocket。
 - 前端仅理解业务命令和统一状态模型，不出现 Topic、Service 或 Action 名称。
@@ -50,6 +55,10 @@ Web 运行面板 ──► Runtime API ──► RemoteRuntimeManager ──SSH�
 - `RemoteRuntimeManager` 只下发服务端配置中的白名单任务。
 - 工控机代理为每个任务创建独立进程组，统一处理异常退出、停止和强制回收。
 - 实车速度控制要求工控机速度看门狗在线；Web、网络或看门狗任一环节中断后，底盘接收到的速度会在 0.5 秒内归零。
+- RML63 运动只允许通过类型化接口提交；后端验证 Base 工作系、工具系、碰撞等级、控制器关节限位和 XYZ 工作空间。
+- 工控机桥接器从 `enp4s0` 地址建立机械臂 TCP 连接，并验证到控制器的内核路由确实使用该网口；Web 服务器不会绑定不存在于本机的工控机接口。
+- RealSense 默认由工控机从 `/dev/video4` 单实例采集，经 SSH 压缩视频管道交给 Web 后端并向多个浏览器共享；也支持 Web 服务器本机 `pyrealsense2` 模式。缺少设备或依赖时只报告错误，不生成模拟视频。
+- Web 停止命令依赖网络和控制器响应，不替代示教器或物理急停，也不构成整臂碰撞规划。
 
 ## 并发模型
 

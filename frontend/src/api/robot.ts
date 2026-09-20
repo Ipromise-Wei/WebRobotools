@@ -5,6 +5,26 @@ import type { MapSnapshot, VisualizationConfig } from '@/stores/visualization'
 const api = axios.create({ baseURL: import.meta.env.VITE_API_BASE_URL || '/api', timeout: 5000 })
 
 export interface CommandResponse { success: boolean; state: RobotState }
+export interface ArmConfig {
+  enabled: boolean
+  motion_commands_enabled: boolean
+  model: string
+  transport: 'direct' | 'industrial_pc'
+  host: string
+  port: number
+  network_interface: string
+  expected_tool: string
+  collision_level: number
+  joint_speed_percent: number
+  pose_speed_percent: number
+  workspace_min_m: number[]
+  workspace_max_m: number[]
+  max_pose_segment_m: number
+  keepout_enabled: boolean
+  standby_joints_deg: number[]
+  gripper_enabled: boolean
+  gripper_commands_enabled: boolean
+}
 export type RuntimePhase = 'disabled' | 'unconfigured' | 'offline' | 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
 export interface RuntimeTaskState { id: string; label: string; state: 'pending' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error'; pid: number | null; message: string; dependencies: string[] }
 export interface RuntimeStatus { agent_version: number; orchestrating: boolean; enabled: boolean; reachable: boolean; phase: RuntimePhase; host: string; message: string; supervisor_pid: number | null; tasks: RuntimeTaskState[]; updated_at: string }
@@ -15,15 +35,17 @@ export const robotApi = {
   moveChassis: (linear: number, angular: number) =>
     api.post<CommandResponse>('/chassis/move', { linear, angular }).then((response) => response.data),
   stopChassis: () => api.post<CommandResponse>('/chassis/stop').then((response) => response.data),
-  moveJoint: (joint: number, position: number) =>
-    api.post<CommandResponse>('/arm/joint', { joint, position }).then((response) => response.data),
-  moveJoints: (positions: number[]) =>
-    api.post<CommandResponse>('/arm/joints', { positions }).then((response) => response.data),
-  movePose: (pose: Pose) => api.post<CommandResponse>('/arm/pose', pose).then((response) => response.data),
-  stopArm: () => api.post<CommandResponse>('/arm/stop').then((response) => response.data),
-  openGripper: () => api.post<CommandResponse>('/gripper/open').then((response) => response.data),
-  closeGripper: () => api.post<CommandResponse>('/gripper/close').then((response) => response.data),
-  stopGripper: () => api.post<CommandResponse>('/gripper/stop').then((response) => response.data),
+  armConfig: () => api.get<ArmConfig>('/arm/config').then((response) => response.data),
+  moveJoint: (joint: number, position: number, speed = 5) =>
+    api.post<CommandResponse>('/arm/joint', { joint, position, speed }, { timeout: 15000 }).then((response) => response.data),
+  moveJoints: (positions: number[], speed = 5) =>
+    api.post<CommandResponse>('/arm/joints', { positions, speed }, { timeout: 15000 }).then((response) => response.data),
+  movePose: (pose: Pose, speed = 5) => api.post<CommandResponse>('/arm/pose', { ...pose, speed }, { timeout: 15000 }).then((response) => response.data),
+  stopArm: () => api.post<CommandResponse>('/arm/stop', {}, { timeout: 10000 }).then((response) => response.data),
+  emergencyStopManipulator: () => api.post<CommandResponse>('/arm/emergency-stop', {}, { timeout: 10000 }).then((response) => response.data),
+  openGripper: () => api.post<CommandResponse>('/gripper/open', {}, { timeout: 20000 }).then((response) => response.data),
+  closeGripper: () => api.post<CommandResponse>('/gripper/close', {}, { timeout: 20000 }).then((response) => response.data),
+  stopGripper: () => api.post<CommandResponse>('/gripper/stop', {}, { timeout: 10000 }).then((response) => response.data),
   visualizationConfig: () => api.get<VisualizationConfig>('/visualization/config').then((response) => response.data),
   map: () => api.get<MapSnapshot>('/visualization/map').then((response) => response.data),
   runtimeStatus: () => api.get<RuntimeStatus>('/runtime/status', { timeout: 10000 }).then((response) => response.data),

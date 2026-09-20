@@ -41,7 +41,7 @@ onBeforeUnmount(() => visual.disconnect())
           :y="store.state.chassis.map_pose_received ? store.state.chassis.map_y : store.state.chassis.y"
           :yaw="store.state.chassis.map_pose_received ? store.state.chassis.map_yaw : store.state.chassis.yaw"
         />
-        <CameraPanel :url="visual.config.camera_stream_url" />
+        <CameraPanel :url="visual.config.camera_stream_url" :connected="visual.config.camera_connected" :error="visual.config.camera_error" />
       </div>
 
       <aside class="chassis-console">

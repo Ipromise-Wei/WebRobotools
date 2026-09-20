@@ -8,15 +8,15 @@ class MockArm(ArmController):
     def __init__(self, connected: bool = True) -> None:
         self._state = ArmState(connected=connected)
 
-    async def move_joint(self, joint: int, position: float) -> None:
+    async def move_joint(self, joint: int, position: float, speed: int | None = None) -> None:
         self._state.joints[joint - 1] = position
         self._state.moving = True
 
-    async def move_joints(self, positions: list[float]) -> None:
+    async def move_joints(self, positions: list[float], speed: int | None = None) -> None:
         self._state.joints = list(positions)
         self._state.moving = True
 
-    async def move_pose(self, pose: Pose) -> None:
+    async def move_pose(self, pose: Pose, speed: int | None = None) -> None:
         self._state.pose = pose.model_copy(deep=True)
         self._state.moving = True
 
