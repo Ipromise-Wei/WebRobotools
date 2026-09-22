@@ -2,7 +2,22 @@ import axios from 'axios'
 import type { Pose, RobotState } from '@/stores/robot'
 import type { MapSnapshot, VisualizationConfig } from '@/stores/visualization'
 
-const api = axios.create({ baseURL: import.meta.env.VITE_API_BASE_URL || '/api', timeout: 5000 })
+export const api = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  timeout: 5000,
+  withCredentials: true,
+})
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const url = String(error?.config?.url || '')
+    if (error?.response?.status === 401 && !url.startsWith('/auth/')) {
+      window.dispatchEvent(new CustomEvent('webrobot:session-expired'))
+    }
+    return Promise.reject(error)
+  },
+)
 
 export interface CommandResponse { success: boolean; state: RobotState }
 export interface ArmConfig {
@@ -27,15 +42,18 @@ export interface ArmConfig {
 }
 export type RuntimePhase = 'disabled' | 'unconfigured' | 'offline' | 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
 export interface RuntimeTaskState { id: string; label: string; state: 'pending' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error'; pid: number | null; message: string; dependencies: string[] }
-export interface RuntimeStatus { agent_version: number; orchestrating: boolean; enabled: boolean; reachable: boolean; phase: RuntimePhase; host: string; message: string; supervisor_pid: number | null; tasks: RuntimeTaskState[]; updated_at: string }
+export interface RuntimeStatus { agent_version: number; orchestrating: boolean; enabled: boolean; reachable: boolean; phase: RuntimePhase; host: string; message: string; supervisor_pid: number | null; tasks: RuntimeTaskState[]; updated_at: string; legacy_can0_active?: boolean }
 export interface RuntimeActionResponse { success: boolean; status: RuntimeStatus }
+export interface NavigationStatus { phase: 'idle' | 'sending' | 'navigating' | 'canceling' | 'succeeded' | 'canceled' | 'failed'; message: string; x: number | null; y: number | null; yaw: number | null }
 
 export const robotApi = {
   status: () => api.get<RobotState>('/system/status').then((response) => response.data),
   moveChassis: (linear: number, angular: number) =>
     api.post<CommandResponse>('/chassis/move', { linear, angular }).then((response) => response.data),
-  stopChassis: () => api.post<CommandResponse>('/chassis/stop').then((response) => response.data),
+  stopChassis: () => api.post<CommandResponse>('/chassis/stop', {}, { timeout: 10000 }).then((response) => response.data),
   armConfig: () => api.get<ArmConfig>('/arm/config').then((response) => response.data),
+  connectArm: () => api.post<CommandResponse>('/arm/connect', {}, { timeout: 60000 }).then((response) => response.data),
+  disconnectArm: () => api.post<CommandResponse>('/arm/disconnect', {}, { timeout: 12000 }).then((response) => response.data),
   moveJoint: (joint: number, position: number, speed = 5) =>
     api.post<CommandResponse>('/arm/joint', { joint, position, speed }, { timeout: 15000 }).then((response) => response.data),
   moveJoints: (positions: number[], speed = 5) =>
@@ -48,6 +66,11 @@ export const robotApi = {
   stopGripper: () => api.post<CommandResponse>('/gripper/stop', {}, { timeout: 10000 }).then((response) => response.data),
   visualizationConfig: () => api.get<VisualizationConfig>('/visualization/config').then((response) => response.data),
   map: () => api.get<MapSnapshot>('/visualization/map').then((response) => response.data),
+  clearMapCache: () => api.post<MapSnapshot>('/visualization/map/cache/clear').then((response) => response.data),
+  navigationStatus: () => api.get<NavigationStatus>('/visualization/navigation/status').then((response) => response.data),
+  navigateTo: (x: number, y: number, yaw: number, frame_id: string) =>
+    api.post<NavigationStatus>('/visualization/navigation/goal', { x, y, yaw, frame_id }, { timeout: 22000 }).then((response) => response.data),
+  cancelNavigation: () => api.post<NavigationStatus>('/visualization/navigation/cancel', {}, { timeout: 8000 }).then((response) => response.data),
   runtimeStatus: () => api.get<RuntimeStatus>('/runtime/status', { timeout: 10000 }).then((response) => response.data),
   startRuntime: () => api.post<RuntimeActionResponse>('/runtime/start', {}, { timeout: 25000 }).then((response) => response.data),
   stopRuntime: () => api.post<RuntimeActionResponse>('/runtime/stop', {}, { timeout: 25000 }).then((response) => response.data),

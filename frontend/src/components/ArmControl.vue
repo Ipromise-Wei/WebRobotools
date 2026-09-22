@@ -29,6 +29,7 @@ const jointSpeed = ref(5)
 const poseSpeed = ref(5)
 const jointDirty = ref(false)
 const poseDirty = ref(false)
+const connectionAction = ref<'connect' | 'disconnect' | ''>('')
 let cameraPoll: number | undefined
 
 const trueHardwareMode = computed(() => store.state.system.mode === 'ros2')
@@ -71,6 +72,22 @@ watch(() => store.state.arm.pose, () => { if (!poseDirty.value) syncPose() }, { 
 
 function confirmAction(message: string) {
   return canMove.value && window.confirm(`${message}\n\n请确认机械臂工作空间内无人且无障碍物。`)
+}
+
+async function toggleArmConnection() {
+  if (connectionAction.value || store.busy || !trueHardwareMode.value || !config.value.enabled) return
+  const disconnecting = store.state.arm.connected
+  if (disconnecting && !window.confirm('确定断开机械臂控制链路吗？\n\n机械臂运动中禁止断开，夹爪 IO 将先释放。')) return
+  connectionAction.value = disconnecting ? 'disconnect' : 'connect'
+  try {
+    const succeeded = await store.command(disconnecting ? robotApi.disconnectArm : robotApi.connectArm)
+    if (succeeded && !disconnecting) {
+      syncJoints()
+      syncPose()
+    }
+  } finally {
+    connectionAction.value = ''
+  }
 }
 
 async function executeJoints() {
@@ -186,8 +203,21 @@ onBeforeUnmount(() => {
     <aside class="arm-command-deck">
       <header class="arm-control-header">
         <div><span class="eyebrow">MANIPULATOR CONTROL</span><h3>真机运动控制</h3></div>
-        <i :class="{ online: canMove }"></i>
+        <div class="arm-connection-actions">
+          <i :class="{ online: store.state.arm.connected }"></i>
+          <button
+            type="button"
+            :class="{ disconnect: store.state.arm.connected }"
+            :disabled="store.busy || !trueHardwareMode || !config.enabled || (store.state.arm.connected && store.state.arm.moving)"
+            @click="toggleArmConnection"
+          >{{ connectionAction === 'connect' ? '连接中…' : connectionAction === 'disconnect' ? '断开中…' : store.state.arm.connected ? '断开' : '连接机械臂' }}</button>
+        </div>
       </header>
+
+      <div class="arm-link-route">
+        <span>工控机固定链路</span>
+        <strong>{{ config.network_interface || '--' }} → {{ config.host || '--' }}:{{ config.port }}</strong>
+      </div>
 
       <p class="arm-safety-state" :class="{ ready: canMove }"><b>{{ canMove ? '安全条件通过' : '运动锁定' }}</b><span>{{ lockReason }}</span></p>
 

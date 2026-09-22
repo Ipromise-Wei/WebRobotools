@@ -8,6 +8,14 @@ class MockArm(ArmController):
     def __init__(self, connected: bool = True) -> None:
         self._state = ArmState(connected=connected)
 
+    async def connect(self) -> None:
+        self._state.connected = True
+        self._state.error = ""
+
+    async def disconnect(self) -> None:
+        self._state.connected = False
+        self._state.moving = False
+
     async def move_joint(self, joint: int, position: float, speed: int | None = None) -> None:
         self._state.joints[joint - 1] = position
         self._state.moving = True

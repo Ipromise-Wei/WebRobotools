@@ -22,7 +22,10 @@ const phaseText: Record<RuntimePhase, string> = {
 }
 const hasActiveTasks = computed(() => status.value.tasks.some((task) => ['starting', 'running', 'stopping', 'error'].includes(task.state)))
 const allRunning = computed(() => status.value.tasks.length > 0 && status.value.tasks.every((task) => task.state === 'running'))
-const controlsBusy = computed(() => !!busyTask.value || startingAll.value || stoppingAll.value || status.value.orchestrating)
+const legacyCanListed = computed(() => status.value.tasks.some((task) => task.id === 'can0'))
+const migrationRequired = computed(() => !!status.value.legacy_can0_active || legacyCanListed.value)
+const visibleTasks = computed(() => status.value.tasks.filter((task) => task.id !== 'can0'))
+const controlsBusy = computed(() => !!busyTask.value || startingAll.value || stoppingAll.value || status.value.orchestrating || migrationRequired.value)
 const taskNames = computed(() => Object.fromEntries(status.value.tasks.map((task) => [task.id, task.label])))
 const errorText = (reason: unknown) => axios.isAxiosError(reason)
   ? String(reason.response?.data?.detail || reason.message)
@@ -62,6 +65,7 @@ async function toggleTask(task: RuntimeTaskState) {
 }
 
 async function startAll() {
+  if (controlsBusy.value) return
   if (!window.confirm('确定按依赖顺序启动全部机器人模块吗？')) return
   startingAll.value = true
   error.value = ''
@@ -76,6 +80,7 @@ async function startAll() {
 }
 
 async function stopAll() {
+  if (migrationRequired.value) return
   if (!window.confirm('确定关闭全部机器人模块吗？')) return
   stoppingAll.value = true
   error.value = ''
@@ -113,10 +118,11 @@ onBeforeUnmount(() => timer && clearInterval(timer))
       <span class="runtime-phase"><i :class="status.phase"></i>{{ phaseText[status.phase] }}</span>
     </header>
 
-    <p v-if="status.agent_version < 2 && hasActiveTasks" class="runtime-notice">{{ status.message }}</p>
+    <p v-if="migrationRequired" class="runtime-error" role="alert">{{ status.legacy_can0_active ? status.message : '后端仍返回旧版 CAN0 任务。为避免误改工控机网卡，模块操作已锁定；请确认现场安全后重启 Web 后端。' }}</p>
+    <p v-else-if="status.agent_version < 2 && hasActiveTasks" class="runtime-notice">{{ status.message }}</p>
     <p v-if="error" class="runtime-error">{{ error }}</p>
     <div class="runtime-switches">
-      <div v-for="task in status.tasks" :key="task.id" class="runtime-switch-row">
+      <div v-for="task in visibleTasks" :key="task.id" class="runtime-switch-row">
         <i :class="task.state"></i>
         <span><strong>{{ task.label }}</strong><small>{{ dependencyText(task) }} · {{ task.message }}</small></span>
         <button
@@ -127,7 +133,7 @@ onBeforeUnmount(() => timer && clearInterval(timer))
           @click="toggleTask(task)"
         ><i></i></button>
       </div>
-      <p v-if="!status.tasks.length">读取模块清单中……</p>
+      <p v-if="!visibleTasks.length && !migrationRequired">读取模块清单中……</p>
     </div>
 
     <footer>
@@ -139,7 +145,7 @@ onBeforeUnmount(() => timer && clearInterval(timer))
       >{{ startingAll || status.orchestrating ? '启动中…' : '一键全启' }}</button>
       <button @click="refresh(false)">刷新</button>
       <button @click="toggleLogs">{{ showLogs ? '收起日志' : '日志' }}</button>
-      <button class="danger" :disabled="stoppingAll || !!busyTask || (!hasActiveTasks && !status.orchestrating)" @click="stopAll">全部停止</button>
+      <button class="danger" :disabled="stoppingAll || !!busyTask || migrationRequired || (!hasActiveTasks && !status.orchestrating)" @click="stopAll">全部停止</button>
     </footer>
     <pre v-if="showLogs">{{ logs.length ? logs.join('\n') : '暂无日志' }}</pre>
   </section>

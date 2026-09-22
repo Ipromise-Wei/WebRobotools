@@ -211,6 +211,9 @@ class RealManClient:
         self.remote = remote
         self._lock = threading.RLock()
         self._socket: ArmTransport | None = None
+        # Hardware access is opt-in. Background state polling must not create a
+        # controller connection before an operator explicitly requests it.
+        self._connection_enabled = False
         self._buffer = ""
         self._decoder = codecs.getincrementaldecoder("utf-8")()
         self._retry_after = 0.0
@@ -225,6 +228,11 @@ class RealManClient:
     def connected(self) -> bool:
         with self._lock:
             return self._socket is not None
+
+    @property
+    def connection_enabled(self) -> bool:
+        with self._lock:
+            return self._connection_enabled
 
     @property
     def last_error(self) -> str:
@@ -249,6 +257,8 @@ class RealManClient:
     def _connect_locked(self, force: bool = False) -> None:
         if self._socket is not None:
             return
+        if not self._connection_enabled:
+            raise ConnectionError("机械臂控制链路未连接，请先在 Web 页面点击连接")
         if not self.arm.enabled:
             raise ConnectionError("真机机械臂控制未启用")
         if not force and time.monotonic() < self._retry_after:
@@ -477,6 +487,24 @@ class RealManClient:
     async def snapshot(self) -> ArmState:
         return await asyncio.to_thread(self._snapshot_sync)
 
+    def _enable_connection_sync(self) -> None:
+        with self._lock:
+            self._connection_enabled = True
+            # An explicit operator action is allowed to retry immediately,
+            # regardless of the backoff left by a previous failed attempt.
+            self._retry_after = 0.0
+
+    async def enable_connection(self) -> None:
+        await asyncio.to_thread(self._enable_connection_sync)
+
+    def _disable_connection_sync(self) -> None:
+        with self._lock:
+            self._connection_enabled = False
+            self._close_locked()
+
+    async def disable_connection(self) -> None:
+        await asyncio.to_thread(self._disable_connection_sync)
+
     def _move_joints_sync(self, positions: list[float], speed: int) -> None:
         target = finite_vector(positions, 6, "关节目标")
         with self._lock:
@@ -627,11 +655,7 @@ class RealManClient:
             raise RealManControllerError(str(exc)) from exc
 
     async def close(self) -> None:
-        await asyncio.to_thread(self._close)
-
-    def _close(self) -> None:
-        with self._lock:
-            self._close_locked()
+        await self.disable_connection()
 
 
 class RealManArmController(ArmController):
@@ -639,6 +663,23 @@ class RealManArmController(ArmController):
         self.client = client
         self.settings = settings
         self._state = ArmState()
+
+    async def connect(self) -> None:
+        await self.client.enable_connection()
+        try:
+            self._state = await self.client.snapshot()
+        except Exception as exc:
+            await self.client.disable_connection()
+            self._state = ArmState(error=str(exc))
+            if isinstance(exc, ArmMotionDisabled):
+                raise
+            raise RealManControllerError(str(exc)) from exc
+
+    async def disconnect(self) -> None:
+        if self._state.moving:
+            raise ArmMotionDisabled("机械臂正在运动，请先停止后再断开控制链路")
+        await self.client.disable_connection()
+        self._state = ArmState(error="控制链路已手动断开")
 
     def _speed(self, value: int | None, default: int) -> int:
         speed = default if value is None else value
@@ -659,6 +700,9 @@ class RealManArmController(ArmController):
         self._state.moving = True
 
     async def stop(self) -> None:
+        if not self.client.connection_enabled:
+            self._state.moving = False
+            return
         await self.client.stop_arm()
         self._state.moving = False
 
@@ -669,9 +713,19 @@ class RealManArmController(ArmController):
         return (await self.get_state()).pose
 
     async def get_state(self) -> ArmState:
+        if not self.client.connection_enabled:
+            self._state.connected = False
+            self._state.moving = False
+            if not self._state.error:
+                self._state.error = "等待在 Web 页面手动连接机械臂"
+            return self._state.model_copy(deep=True)
         try:
             self._state = await self.client.snapshot()
         except Exception as exc:
+            # A broken hardware link returns to the manual-connect state. This
+            # prevents the background poller from repeatedly opening SSH/TCP
+            # sessions without a fresh operator action.
+            await self.client.disable_connection()
             self._state.connected = False
             self._state.moving = False
             self._state.error = str(exc)
@@ -705,6 +759,10 @@ class RealManGripperController(GripperController):
             self._state.moving = False
 
     async def stop(self) -> None:
+        if not self.client.connection_enabled:
+            self._state.status = "stopped"
+            self._state.moving = False
+            return
         await self.client.stop_gripper()
         self._state.status = "stopped"
         self._state.moving = False

@@ -5,6 +5,12 @@ from app.models.arm import ArmState, Pose
 
 class ArmController(ABC):
     @abstractmethod
+    async def connect(self) -> None: ...
+
+    @abstractmethod
+    async def disconnect(self) -> None: ...
+
+    @abstractmethod
     async def move_joint(self, joint: int, position: float, speed: int | None = None) -> None: ...
 
     @abstractmethod

@@ -81,6 +81,24 @@ class RobotManager:
         _, state = await self.state_manager.snapshot()
         return state
 
+    async def connect_arm(self) -> RobotState:
+        async with self._command_lock:
+            try:
+                await self.arm.connect()
+            except Exception:
+                await self._sync_state()
+                raise
+            return await self._sync_state()
+
+    async def disconnect_arm(self) -> RobotState:
+        async with self._command_lock:
+            # Refresh trajectory state before releasing tool IO or closing the
+            # tunnel. The controller refuses disconnect while motion is active.
+            await self.arm.get_state()
+            await self.gripper.stop()
+            await self.arm.disconnect()
+            return await self._sync_state()
+
     async def move_chassis(self, linear: float, angular: float) -> RobotState:
         async with self._command_lock:
             await self.chassis.move(linear, angular)

@@ -5,12 +5,15 @@ from unittest.mock import patch
 import httpx
 from fastapi import WebSocketDisconnect
 
-from app.core.config import RobotSettings, Settings
+from app.core.config import AuthSettings, RobotSettings, Settings
 from app.main import app
 from app.websocket.manager import websocket_endpoint
 
 
-TEST_SETTINGS = Settings(robot=RobotSettings(mode="mock"))
+TEST_SETTINGS = Settings(
+    auth=AuthSettings(enabled=False),
+    robot=RobotSettings(mode="mock"),
+)
 
 
 async def _run_api_scenario() -> None:

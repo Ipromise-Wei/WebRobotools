@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRobotStore } from '@/stores/robot'
+import { useVisualizationStore } from '@/stores/visualization'
 
 const props = defineProps<{ enabled?: boolean }>()
 const store = useRobotStore()
+const visual = useVisualizationStore()
 const root = ref<HTMLElement>()
 const pad = ref<HTMLElement>()
 const controlMode = ref<'joystick' | 'keyboard'>('keyboard')
@@ -20,6 +22,7 @@ let streamTimer: number | undefined
 const knobStyle = computed(() => ({ transform: `translate(${knob.x}px, ${knob.y}px)` }))
 const effectiveLinear = computed(() => linearMax.value * sensitivity.value)
 const effectiveAngular = computed(() => angularMax.value * sensitivity.value)
+const navigationActive = computed(() => ['sending', 'navigating', 'canceling'].includes(visual.navigation.phase))
 
 function axis(value: number) {
   const deadzone = 0.08
@@ -231,7 +234,7 @@ onBeforeUnmount(() => {
       <label>线速度上限 <output>{{ linearMax.toFixed(1) }} m/s</output><input v-model.number="linearMax" type="range" min="0.1" max="1" step="0.1" /></label>
       <label>角速度上限 <output>{{ angularMax.toFixed(1) }} rad/s</output><input v-model.number="angularMax" type="range" min="0.1" max="2" step="0.1" /></label>
       <div class="sensitivity"><span>灵敏度</span><button v-for="value in [.25,.5,.8,1]" :key="value" :class="{ active: sensitivity === value }" @click="sensitivity = value">{{ value * 100 }}%</button></div>
-      <button class="emergency-stop" @click="emergencyStop"><b>■</b> 急停 <small>SPACE</small></button>
+      <button class="emergency-stop" @click="emergencyStop"><b>■</b> {{ navigationActive ? '停止导航' : '停止运动' }} <small>{{ navigationActive ? 'NAV2' : 'SPACE' }}</small></button>
       <p>{{ controlMode === 'keyboard' ? '点击控制区后使用 ↑ ↓ ← →，亦支持 W/A/S/D' : '拖动距离决定速度，斜向拖动可边走边转' }}</p>
     </div>
   </section>

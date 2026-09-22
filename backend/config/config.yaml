@@ -7,6 +7,16 @@ server:
     - http://localhost:5173
     - http://127.0.0.1:5173
 
+# Browser access is protected by a signed HttpOnly session. On the first start,
+# the backend creates config/auth.local.json and prints the initial password once.
+auth:
+  enabled: true
+  credential_file: config/auth.local.json
+  session_hours: 8
+  cookie_secure: false
+  max_attempts: 5
+  lockout_seconds: 300
+
 robot:
   mode: ros2
   state_poll_interval: 0.2
@@ -20,6 +30,8 @@ ros2:
   battery_topic: /battery_state
   map_topic: /map
   plan_topic: /plan
+  navigate_to_pose_action: /navigate_to_pose
+  navigation_active_topic: /webrobot/navigation/active
   allow_motion_commands: true
   command_timeout: 0.5
   watchdog_status_topic: /webrobot/cmd_vel_watchdog/ready
@@ -40,7 +52,8 @@ visualization:
     retry_interval_s: 2.0
 
 # RealMan RML63 true-hardware control, aligned with grasp_studio/settings.json.
-# Connecting and polling are read-only; motion is exposed only through typed Web APIs.
+# The link is opened only by the Web connect button; motion is exposed only
+# through typed Web APIs.
 arm:
   enabled: true
   transport: industrial_pc
@@ -112,6 +125,6 @@ remote_runtime:
       dependencies: [laser_scan]
     - id: navigation
       label: Nav2 导航
-      command: ros2 launch nav2_bringup navigation_launch.py use_sim_time:=False autostart:=True use_composition:=False params_file:=/home/hzauaiot/songwei/Laser/config/nav2_params.yaml
+      command: /usr/bin/python3 /home/hzauaiot/.local/lib/webrobot/nav2_web_runtime.py --params-file /home/hzauaiot/songwei/Laser/config/nav2_params.yaml
       startup_delay: 5
       dependencies: [chassis, slam]

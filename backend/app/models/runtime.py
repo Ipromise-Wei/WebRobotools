@@ -21,6 +21,7 @@ class RuntimeStatus(BaseModel):
     orchestrating: bool = False
     enabled: bool = False
     reachable: bool = False
+    legacy_can0_active: bool = False
     phase: RuntimePhase = "disabled"
     host: str = ""
     message: str = ""

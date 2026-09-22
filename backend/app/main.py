@@ -1,13 +1,14 @@
 import asyncio
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.adapters.ros2.node import MotionControlDisabled, ROS2NodeAdapter
-from app.api import arm, chassis, gripper, runtime, system, visualization
+from app.api import arm, auth, chassis, gripper, runtime, system, visualization
 from app.controllers.arm.realman import (
     ArmMotionDisabled,
     RealManArmController,
@@ -19,6 +20,7 @@ from app.controllers.chassis.mini_v3 import MiniV3ChassisController
 from app.controllers.mock.arm import MockArm
 from app.controllers.mock.gripper import MockGripper
 from app.core.config import get_settings
+from app.core.auth import AuthManager, SESSION_COOKIE
 from app.core.logger import configure_logging
 from app.core.map_manager import MapManager
 from app.core.realsense_stream import RealSenseStream
@@ -42,6 +44,10 @@ async def deploy_arm_bridge(remote_runtime: RemoteRuntimeManager) -> None:
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings.server.log_level)
+    auth_manager = AuthManager(
+        settings.auth, backend_root=Path(__file__).resolve().parents[1]
+    )
+    auth_manager.initialize()
     state_manager = StateManager()
     map_manager = MapManager()
     realsense_stream = RealSenseStream(
@@ -78,6 +84,7 @@ async def lifespan(app: FastAPI):
         robot_manager = RobotManager.create_mock(state_manager)
     visualization_service = VisualizationService(map_manager, adapter, settings.robot.state_poll_interval)
     app.state.settings = settings
+    app.state.auth_manager = auth_manager
     app.state.state_manager = state_manager
     app.state.map_manager = map_manager
     app.state.realsense_stream = realsense_stream
@@ -104,7 +111,7 @@ async def lifespan(app: FastAPI):
 settings = get_settings()
 app = FastAPI(
     title=settings.server.app_name,
-    version="0.4.0",
+    version="0.5.0",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -114,12 +121,42 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(chassis.router, prefix="/api/chassis", tags=["chassis"])
 app.include_router(arm.router, prefix="/api/arm", tags=["arm"])
 app.include_router(gripper.router, prefix="/api/gripper", tags=["gripper"])
 app.include_router(visualization.router, prefix="/api/visualization", tags=["visualization"])
 app.include_router(runtime.router, prefix="/api/runtime", tags=["runtime"])
+
+
+@app.middleware("http")
+async def require_authenticated_session(request: Request, call_next):
+    public_paths = {
+        "/api/auth/status",
+        "/api/auth/login",
+        "/api/auth/logout",
+        "/health",
+    }
+    protected = (
+        request.url.path.startswith("/api/")
+        or request.url.path in {"/docs", "/redoc", "/openapi.json"}
+    )
+    if (
+        protected
+        and request.method != "OPTIONS"
+        and request.url.path not in public_paths
+    ):
+        manager: AuthManager = request.app.state.auth_manager
+        identity = manager.validate_session(request.cookies.get(SESSION_COOKIE))
+        if identity is None:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "登录已失效，请重新登录"},
+                headers={"Cache-Control": "no-store"},
+            )
+        request.state.user = identity
+    return await call_next(request)
 
 
 @app.exception_handler(MotionControlDisabled)
@@ -144,9 +181,27 @@ async def health() -> dict[str, str]:
 
 @app.websocket("/ws/robot")
 async def robot_websocket(websocket: WebSocket) -> None:
-    await websocket_endpoint(websocket, websocket.app.state.state_manager)
+    manager: AuthManager = websocket.app.state.auth_manager
+    token = websocket.cookies.get(SESSION_COOKIE)
+    if manager.validate_session(token) is None:
+        await websocket.close(code=4401, reason="Authentication required")
+        return
+    await websocket_endpoint(
+        websocket,
+        websocket.app.state.state_manager,
+        lambda: manager.validate_session(token) is not None,
+    )
 
 
 @app.websocket("/ws/map")
 async def map_websocket(websocket: WebSocket) -> None:
-    await map_websocket_endpoint(websocket, websocket.app.state.map_manager)
+    manager: AuthManager = websocket.app.state.auth_manager
+    token = websocket.cookies.get(SESSION_COOKIE)
+    if manager.validate_session(token) is None:
+        await websocket.close(code=4401, reason="Authentication required")
+        return
+    await map_websocket_endpoint(
+        websocket,
+        websocket.app.state.map_manager,
+        lambda: manager.validate_session(token) is not None,
+    )

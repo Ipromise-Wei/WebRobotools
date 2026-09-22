@@ -2,9 +2,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.dependencies import get_robot_manager
+from app.core.dependencies import get_remote_runtime, get_robot_manager
 from app.core.robot_manager import RobotManager
 from app.core.config import get_settings
+from app.core.remote_runtime import RemoteRuntimeError, RemoteRuntimeManager
 from app.models.arm import ArmConfigResponse, ArmJointRequest, ArmJointsRequest, ArmPoseRequest, ArmState, Pose
 from app.models.system import CommandResponse
 
@@ -70,6 +71,30 @@ async def get_arm_pose(
     manager: Annotated[RobotManager, Depends(get_robot_manager)],
 ) -> Pose:
     return (await manager.get_state()).arm.pose
+
+
+@router.post("/connect", response_model=CommandResponse)
+async def connect_arm(
+    manager: Annotated[RobotManager, Depends(get_robot_manager)],
+    remote_runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
+) -> CommandResponse:
+    require_true_hardware()
+    try:
+        await remote_runtime.ensure_arm_bridge_deployed()
+    except (OSError, RemoteRuntimeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"无法在工控机部署机械臂桥接器：{exc}",
+        ) from exc
+    return CommandResponse(state=await manager.connect_arm())
+
+
+@router.post("/disconnect", response_model=CommandResponse)
+async def disconnect_arm(
+    manager: Annotated[RobotManager, Depends(get_robot_manager)],
+) -> CommandResponse:
+    require_true_hardware()
+    return CommandResponse(state=await manager.disconnect_arm())
 
 
 @router.post("/joint", response_model=CommandResponse)

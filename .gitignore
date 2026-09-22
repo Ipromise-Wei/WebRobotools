@@ -10,3 +10,4 @@ frontend/vite.config.js
 frontend/vite.config.d.ts
 .env
 *.log
+backend/config/auth.local.json*

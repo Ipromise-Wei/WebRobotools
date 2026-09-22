@@ -12,6 +12,7 @@ class MiniV3ChassisController(ChassisController):
 
     async def stop(self) -> None:
         if self.adapter.config.allow_motion_commands:
+            await self.adapter.cancel_navigation()
             self.adapter.set_velocity(0.0, 0.0)
 
     async def get_state(self) -> ChassisState:

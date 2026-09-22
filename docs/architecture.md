@@ -4,6 +4,9 @@
 
 ```text
 Vue 页面
+  │ HttpOnly 登录会话
+  ▼
+FastAPI Auth Gate
   │ REST command
   ▼
 FastAPI Router
@@ -32,10 +35,13 @@ Web 运行面板 ──► Runtime API ──► RemoteRuntimeManager ──SSH�
   ├─ /map、/plan ───────────► MapManager ────► /ws/map
   └─ TF map→base_link ──────► 地图机器人位姿
 
-机械臂页面 ──REST──► RobotManager ──► RealManArmController ──SSH stdio──► 工控机桥接器
-                                      └► RealManGripperController          └─ enp4s0 ─► RML63 / 工具 IO
+机械臂连接按钮 ──REST──► RobotManager ──► RealManArmController ──SSH stdio──► 工控机桥接器
+                                          └► RealManGripperController          └─ enp4s0 ─► RML63 192.168.1.20:8080 / 工具 IO
 
 工控机 RealSense ──V4L2/FFmpeg──► SSH JPEG 管道 ──► Web 单实例帧缓存 ──MJPEG──► 底盘页 / 机械臂页
+
+地图选点/朝向 ──► NavigateToPose Action ──► Nav2 速度平滑器 ──/webrobot/nav_cmd_vel──► 工控机速度看门狗 ──► /cmd_vel
+工控机已配置 can0（UP、500000 bit/s） ──只读校验──► Ranger Mini V3 底盘任务
 ```
 
 地图和摄像头直接嵌入移动底盘页面，不创建单独的可视化页面。
@@ -51,11 +57,14 @@ Web 运行面板 ──► Runtime API ──► RemoteRuntimeManager ──SSH�
 
 ## 安全边界
 
+- 浏览器必须先通过管理员登录；REST 控制接口、API 文档和两条 WebSocket 链路统一校验签名会话。
+- 密码使用 PBKDF2-SHA256 加盐存储，本机凭据文件不进入 Git；连续失败登录按来源地址临时锁定。
 - 浏览器不直接连接工控机 SSH，也不能提交任意远程命令。
 - `RemoteRuntimeManager` 只下发服务端配置中的白名单任务。
 - 工控机代理为每个任务创建独立进程组，统一处理异常退出、停止和强制回收。
 - 实车速度控制要求工控机速度看门狗在线；Web、网络或看门狗任一环节中断后，底盘接收到的速度会在 0.5 秒内归零。
 - RML63 运动只允许通过类型化接口提交；后端验证 Base 工作系、工具系、碰撞等级、控制器关节限位和 XYZ 工作空间。
+- RML63 链路只能由已登录用户在机械臂页面显式连接；后台状态轮询不会自行建立真机连接，断开后也不会被轮询重新打开。
 - 工控机桥接器从 `enp4s0` 地址建立机械臂 TCP 连接，并验证到控制器的内核路由确实使用该网口；Web 服务器不会绑定不存在于本机的工控机接口。
 - RealSense 默认由工控机从 `/dev/video4` 单实例采集，经 SSH 压缩视频管道交给 Web 后端并向多个浏览器共享；也支持 Web 服务器本机 `pyrealsense2` 模式。缺少设备或依赖时只报告错误，不生成模拟视频。
 - Web 停止命令依赖网络和控制器响应，不替代示教器或物理急停，也不构成整臂碰撞规划。

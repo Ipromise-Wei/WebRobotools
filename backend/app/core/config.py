@@ -15,6 +15,15 @@ class ServerSettings(BaseModel):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
 
+class AuthSettings(BaseModel):
+    enabled: bool = True
+    credential_file: str = "config/auth.local.json"
+    session_hours: int = Field(default=8, ge=1, le=24)
+    cookie_secure: bool = False
+    max_attempts: int = Field(default=5, ge=3, le=20)
+    lockout_seconds: int = Field(default=300, ge=30, le=3600)
+
+
 class RobotSettings(BaseModel):
     mode: Literal["mock", "ros2"] = "mock"
     state_poll_interval: float = Field(default=0.2, gt=0.05, le=2.0)
@@ -22,15 +31,27 @@ class RobotSettings(BaseModel):
 
 class ROS2Settings(BaseModel):
     node_name: str = "robot_web_control"
-    cmd_vel_topic: str = "/cmd_vel"
+    cmd_vel_topic: str = "/webrobot/cmd_vel"
     odom_topic: str = "/odom"
     battery_topic: str = "/battery_state"
     map_topic: str = "/map"
     plan_topic: str = "/plan"
+    navigate_to_pose_action: str = "/navigate_to_pose"
+    navigation_active_topic: str = "/webrobot/navigation/active"
     allow_motion_commands: bool = False
     command_timeout: float = Field(default=0.5, ge=0.1, le=2.0)
     watchdog_status_topic: str = "/webrobot/cmd_vel_watchdog/ready"
     watchdog_timeout: float = Field(default=1.0, ge=0.2, le=5.0)
+
+    @model_validator(mode="after")
+    def validate_motion_topics(self) -> "ROS2Settings":
+        if self.allow_motion_commands and (
+            self.cmd_vel_topic != "/webrobot/cmd_vel"
+            or self.navigation_active_topic != "/webrobot/navigation/active"
+            or self.watchdog_status_topic != "/webrobot/cmd_vel_watchdog/ready"
+        ):
+            raise ValueError("实车速度指令与导航心跳必须使用工控机看门狗的固定安全话题")
+        return self
 
 
 class RealSenseSettings(BaseModel):
@@ -147,6 +168,7 @@ class RemoteRuntimeSettings(BaseModel):
 
 class Settings(BaseModel):
     server: ServerSettings = Field(default_factory=ServerSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
     robot: RobotSettings = Field(default_factory=RobotSettings)
     ros2: ROS2Settings = Field(default_factory=ROS2Settings)
     visualization: VisualizationSettings = Field(default_factory=VisualizationSettings)
