@@ -1,11 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { robotApi, type NavigationStatus } from '@/api/robot'
+import { decodeMapSnapshot, emptyMap, type MapSnapshot, type MapWireSnapshot } from '@/mapTransport'
 
-export interface MapSnapshot { frame_id: string; width: number; height: number; resolution: number; origin_x: number; origin_y: number; origin_yaw: number; data: number[]; path: { x: number; y: number }[]; revision: number; updated_at: string }
+export type { MapSnapshot } from '@/mapTransport'
 export interface VisualizationConfig { camera_stream_url: string; camera_enabled: boolean; camera_connected: boolean; camera_serial: string; camera_error: string; map_topic: string; plan_topic: string; motion_commands_enabled: boolean; navigation_ready: boolean; navigation_reason: string }
-
-const emptyMap: MapSnapshot = { frame_id: 'map', width: 0, height: 0, resolution: .05, origin_x: 0, origin_y: 0, origin_yaw: 0, data: [], path: [], revision: 0, updated_at: new Date().toISOString() }
 
 export const useVisualizationStore = defineStore('visualization', () => {
   const map = ref(emptyMap)
@@ -17,12 +16,33 @@ export const useVisualizationStore = defineStore('visualization', () => {
   let navigationPoll: number | undefined
   let configInFlight = false
   let navigationInFlight = false
+  let pendingMap: MapWireSnapshot | undefined
+  let mapDecoding = false
   let closed = false
+
+  async function queueMap(payload: MapWireSnapshot) {
+    pendingMap = payload
+    if (mapDecoding) return
+    mapDecoding = true
+    try {
+      while (pendingMap) {
+        const next = pendingMap
+        pendingMap = undefined
+        const decoded = await decodeMapSnapshot(next)
+        if (decoded.revision >= map.value.revision) map.value = decoded
+      }
+    } catch {
+      // The next map revision can recover from one corrupted network frame.
+    } finally { mapDecoding = false }
+  }
 
   function connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     socket = new WebSocket(`${protocol}//${location.host}/ws/map`)
-    socket.onmessage = (event) => { const msg = JSON.parse(event.data); if (msg.type === 'map') map.value = msg.data }
+    socket.onmessage = (event) => {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'map') void queueMap(msg.data as MapWireSnapshot)
+    }
     socket.onclose = () => { if (!closed) reconnect = window.setTimeout(connect, 2000) }
   }
   async function initialize() {
@@ -30,7 +50,10 @@ export const useVisualizationStore = defineStore('visualization', () => {
     connect()
     try { config.value = await robotApi.visualizationConfig() }
     catch { /* The periodic refresh below retries after backend startup. */ }
-    try { map.value = await robotApi.map() }
+    try {
+      const next = await robotApi.map()
+      if (next.revision >= map.value.revision) map.value = next
+    }
     catch { /* The map WebSocket retries independently. */ }
     try { navigation.value = await robotApi.navigationStatus() }
     catch { /* Status polling below retries. */ }

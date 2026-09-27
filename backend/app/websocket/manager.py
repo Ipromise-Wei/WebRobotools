@@ -44,11 +44,11 @@ async def map_websocket_endpoint(
     is_authorized: Callable[[], bool] | None = None,
 ) -> None:
     await websocket.accept()
-    version, snapshot = await manager.snapshot()
+    version, snapshot = await manager.transport_snapshot()
     try:
-        await websocket.send_json({"type": "map", "version": version, "data": snapshot.model_dump(mode="json")})
+        await websocket.send_json({"type": "map", "version": version, "data": snapshot})
         while True:
-            next_version, snapshot = await manager.wait_for_update(version)
+            next_version, snapshot = await manager.wait_for_transport_update(version)
             if is_authorized is not None and not is_authorized():
                 await websocket.close(code=4401, reason="Session expired")
                 return
@@ -56,6 +56,6 @@ async def map_websocket_endpoint(
                 await websocket.send_json({"type": "heartbeat", "version": version})
             else:
                 version = next_version
-                await websocket.send_json({"type": "map", "version": version, "data": snapshot.model_dump(mode="json")})
+                await websocket.send_json({"type": "map", "version": version, "data": snapshot})
     except (WebSocketDisconnect, RuntimeError):
         return

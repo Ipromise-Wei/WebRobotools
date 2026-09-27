@@ -1,9 +1,12 @@
 import asyncio
+import base64
 import threading
 from types import SimpleNamespace
+import zlib
 
 from app.adapters.ros2.node import ROS2NodeAdapter
 from app.core.map_manager import MapManager
+from app.core.map_transport import MAP_DATA_ENCODING, encode_map_snapshot
 from app.core.realsense_stream import RealSenseStream
 from app.core.config import RealSenseSettings
 from app.models.visualization import MapSnapshot
@@ -52,8 +55,19 @@ def test_map_manager_reuses_immutable_grid_snapshot() -> None:
         _, returned = await manager.snapshot()
         assert returned is snapshot
         assert returned.data is snapshot.data
+        version, payload = await manager.transport_snapshot()
+        assert version == 1
+        assert payload["data_encoding"] == MAP_DATA_ENCODING
 
     asyncio.run(scenario())
+
+
+def test_map_transport_encodes_signed_cells_as_compressed_bytes() -> None:
+    payload = encode_map_snapshot(MapSnapshot(width=3, height=1, data=[-1, 0, 100]))
+    compressed = base64.b64decode(payload["data"])
+
+    assert payload["data_encoding"] == MAP_DATA_ENCODING
+    assert list(zlib.decompress(compressed)) == [255, 0, 100]
 
 
 def test_camera_capture_waits_for_a_browser_stream_request() -> None:

@@ -1,11 +1,11 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.dependencies import get_map_manager
 from app.core.map_manager import MapManager
-from app.models.visualization import CameraStreamStatus, MapSnapshot, NavigationGoalRequest, NavigationStatus, VisualizationConfig
+from app.models.visualization import CameraStreamStatus, NavigationGoalRequest, NavigationStatus, VisualizationConfig
 
 router = APIRouter()
 
@@ -55,23 +55,24 @@ async def camera_stream(request: Request) -> StreamingResponse:
     )
 
 
-@router.get("/map", response_model=MapSnapshot)
-async def current_map(manager: Annotated[MapManager, Depends(get_map_manager)]) -> MapSnapshot:
-    _, snapshot = await manager.snapshot()
-    return snapshot
+@router.get("/map")
+async def current_map(manager: Annotated[MapManager, Depends(get_map_manager)]) -> JSONResponse:
+    _, snapshot = await manager.transport_snapshot()
+    return JSONResponse(snapshot)
 
 
-@router.post("/map/cache/clear", response_model=MapSnapshot)
+@router.post("/map/cache/clear")
 async def clear_map_cache(
     request: Request,
     manager: Annotated[MapManager, Depends(get_map_manager)],
-) -> MapSnapshot:
+) -> JSONResponse:
     adapter = request.app.state.ros2_adapter
     if adapter is None:
         raise HTTPException(status_code=423, detail="地图缓存清除仅适用于 ROS2 真机模式")
     snapshot = adapter.clear_map_cache()
     await manager.replace(snapshot)
-    return snapshot
+    _, payload = await manager.transport_snapshot()
+    return JSONResponse(payload)
 
 
 @router.get("/navigation/status", response_model=NavigationStatus)

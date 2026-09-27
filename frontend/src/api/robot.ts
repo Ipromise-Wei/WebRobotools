@@ -1,6 +1,7 @@
 import axios from 'axios'
 import type { Pose, RobotState } from '@/stores/robot'
-import type { MapSnapshot, VisualizationConfig } from '@/stores/visualization'
+import type { VisualizationConfig } from '@/stores/visualization'
+import { decodeMapSnapshot, type MapWireSnapshot } from '@/mapTransport'
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
@@ -66,8 +67,8 @@ export const robotApi = {
   closeGripper: () => api.post<CommandResponse>('/gripper/close', {}, { timeout: 20000 }).then((response) => response.data),
   stopGripper: () => api.post<CommandResponse>('/gripper/stop', {}, { timeout: 10000 }).then((response) => response.data),
   visualizationConfig: () => api.get<VisualizationConfig>('/visualization/config').then((response) => response.data),
-  map: () => api.get<MapSnapshot>('/visualization/map').then((response) => response.data),
-  clearMapCache: () => api.post<MapSnapshot>('/visualization/map/cache/clear').then((response) => response.data),
+  map: () => api.get<MapWireSnapshot>('/visualization/map').then((response) => decodeMapSnapshot(response.data)),
+  clearMapCache: () => api.post<MapWireSnapshot>('/visualization/map/cache/clear').then((response) => decodeMapSnapshot(response.data)),
   navigationStatus: () => api.get<NavigationStatus>('/visualization/navigation/status').then((response) => response.data),
   navigateTo: (x: number, y: number, yaw: number, frame_id: string) =>
     api.post<NavigationStatus>('/visualization/navigation/goal', { x, y, yaw, frame_id }, { timeout: 15000 }).then((response) => response.data),
