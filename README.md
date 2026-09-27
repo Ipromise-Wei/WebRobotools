@@ -134,4 +134,4 @@ cd frontend && npm run build
 
 系统边界及接口约定见 [docs/architecture.md](docs/architecture.md) 和 [docs/api.md](docs/api.md)。
 
-版本变化见 [CHANGELOG.md](CHANGELOG.md)，v0.6.0 的完整建图说明见 [v0.6.0 版本说明](docs/releases/v0.6.0.md)。
+每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前补丁版本见 [v0.6.1 版本说明](docs/releases/v0.6.1.md)。
