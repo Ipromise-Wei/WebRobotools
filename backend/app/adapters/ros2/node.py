@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Sequence
+from dataclasses import dataclass
 import math
 import threading
 import time
@@ -12,6 +14,20 @@ from app.models.visualization import MapSnapshot, NavigationStatus, Point2D
 
 class MotionControlDisabled(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class _NavigationGrid:
+    """Original-resolution grid retained solely for server-side safety checks."""
+
+    frame_id: str
+    width: int
+    height: int
+    resolution: float
+    origin_x: float
+    origin_y: float
+    origin_yaw: float
+    data: Sequence[int]
 
 
 class ROS2NodeAdapter:
@@ -29,6 +45,7 @@ class ROS2NodeAdapter:
         self._velocity = (0.0, 0.0)
         self._state = ChassisState()
         self._map = MapSnapshot()
+        self._navigation_grid: _NavigationGrid | None = None
         self._thread: threading.Thread | None = None
         self._node: Any = None
         self._executor: Any = None
@@ -196,10 +213,10 @@ class ROS2NodeAdapter:
         # SLAM untouched and prevents map copies from starving FastAPI's event
         # loop while mapping.
         with self._lock:
-            cached = self._map
+            cached = self._navigation_grid
             self._last_map = now
             geometry_changed = (
-                not cached.data
+                cached is None
                 or cached.frame_id != (message.header.frame_id or "map")
                 or cached.width != message.info.width
                 or cached.height != message.info.height
@@ -210,27 +227,57 @@ class ROS2NodeAdapter:
                 and now - self._last_map_snapshot < self.config.map_snapshot_interval_s
             ):
                 return
-            path = cached.path
-            revision = cached.revision + 1
+            path = self._map.path
+            revision = self._map.revision + 1
         q = message.info.origin.orientation
         origin_yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        # rclpy exposes int8 occupancy values as an immutable-by-convention
+        # sequence owned by this message instance. Retain that sequence for
+        # exact Nav2 validation instead of copying a huge map into Python.
+        # The browser receives only a bounded, downsampled grid.
+        source_data: Sequence[int] = message.data
+        expected_cells = message.info.width * message.info.height
+        if len(source_data) != expected_cells:
+            return
+        stride = max(1, math.ceil(math.sqrt(expected_cells / self.config.web_map_max_cells)))
+        display_width = math.ceil(message.info.width / stride)
+        display_height = math.ceil(message.info.height / stride)
+        if stride == 1:
+            display_data = list(source_data)
+        else:
+            display_data = []
+            for row in range(0, message.info.height, stride):
+                row_start = row * message.info.width
+                for value in source_data[row_start:row_start + message.info.width:stride]:
+                    display_data.append(value - 256 if value > 127 else value)
         # ROS messages are locally typed data. model_construct deliberately
-        # avoids Pydantic making a second full-size copy of the grid list.
+        # avoids Pydantic making a second full-size copy of the display grid.
         snapshot = MapSnapshot.model_construct(
             frame_id=message.header.frame_id or "map",
-            width=message.info.width,
-            height=message.info.height,
-            resolution=message.info.resolution,
+            width=display_width,
+            height=display_height,
+            resolution=message.info.resolution * stride,
             origin_x=message.info.origin.position.x,
             origin_y=message.info.origin.position.y,
             origin_yaw=origin_yaw,
-            data=list(message.data),
+            data=display_data,
             path=path,
             revision=revision,
+            path_revision=self._map.path_revision,
             updated_at=datetime.now(timezone.utc),
         )
         with self._lock:
             self._map = snapshot
+            self._navigation_grid = _NavigationGrid(
+                frame_id=message.header.frame_id or "map",
+                width=message.info.width,
+                height=message.info.height,
+                resolution=message.info.resolution,
+                origin_x=message.info.origin.position.x,
+                origin_y=message.info.origin.position.y,
+                origin_yaw=origin_yaw,
+                data=source_data,
+            )
             self._last_map_snapshot = now
 
     def _on_path(self, message: Any) -> None:
@@ -241,7 +288,7 @@ class ROS2NodeAdapter:
             self._map = self._map.model_copy(
                 update={
                     "path": [Point2D(x=p.pose.position.x, y=p.pose.position.y) for p in message.poses],
-                    "revision": self._map.revision + 1,
+                    "path_revision": self._map.path_revision + 1,
                     "updated_at": datetime.now(timezone.utc),
                 }
             )
@@ -249,8 +296,13 @@ class ROS2NodeAdapter:
     def clear_map_cache(self) -> MapSnapshot:
         """Drop only the Web adapter's latest map and path, not SLAM's map."""
         with self._lock:
-            self._map = MapSnapshot(revision=self._map.revision + 1)
+            self._map = MapSnapshot(
+                revision=self._map.revision + 1,
+                path_revision=self._map.path_revision + 1,
+            )
+            self._navigation_grid = None
             self._last_map = 0.0
+            self._last_map_snapshot = 0.0
             return self._map.model_copy(deep=True)
 
     def navigation_status(self) -> NavigationStatus:
@@ -268,12 +320,12 @@ class ROS2NodeAdapter:
         if not self.motion_commands_ready():
             return False, "等待工控机速度看门狗上线"
         with self._lock:
-            grid = self._map
+            grid = self._navigation_grid
             last_map = self._last_map
             manual_velocity = self._velocity
         if abs(manual_velocity[0]) > .001 or abs(manual_velocity[1]) > .001:
             return False, "请先松开手动驾驶控制"
-        if not grid.data or grid.frame_id != "map":
+        if grid is None or not grid.data or grid.frame_id != "map":
             return False, "等待 map 坐标系的 SLAM 地图"
         if time.monotonic() - last_map > 30.0:
             return False, "地图已超过 30 秒未更新"
@@ -368,10 +420,10 @@ class ROS2NodeAdapter:
         if not ready:
             raise MotionControlDisabled(reason)
         with self._lock:
-            grid = self._map
+            grid = self._navigation_grid
             if self._nav_status.phase in {"sending", "navigating", "canceling"}:
                 raise MotionControlDisabled("已有导航目标，请先取消")
-            if not grid.data or grid.frame_id != frame_id or grid.resolution <= 0:
+            if grid is None or not grid.data or grid.frame_id != frame_id or grid.resolution <= 0:
                 raise MotionControlDisabled("没有与目标坐标系匹配的地图")
             if time.monotonic() - self._last_map > 30.0:
                 raise MotionControlDisabled("地图数据已超过 30 秒未更新，禁止发送导航目标")

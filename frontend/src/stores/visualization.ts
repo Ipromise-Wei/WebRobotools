@@ -20,6 +20,14 @@ export const useVisualizationStore = defineStore('visualization', () => {
   let mapDecoding = false
   let closed = false
 
+  function acceptMap(next: MapSnapshot) {
+    if (next.revision > map.value.revision) {
+      map.value = next
+    } else if (next.revision === map.value.revision && next.path_revision >= map.value.path_revision) {
+      map.value = next
+    }
+  }
+
   async function queueMap(payload: MapWireSnapshot) {
     pendingMap = payload
     if (mapDecoding) return
@@ -28,8 +36,7 @@ export const useVisualizationStore = defineStore('visualization', () => {
       while (pendingMap) {
         const next = pendingMap
         pendingMap = undefined
-        const decoded = await decodeMapSnapshot(next)
-        if (decoded.revision >= map.value.revision) map.value = decoded
+        acceptMap(await decodeMapSnapshot(next))
       }
     } catch {
       // The next map revision can recover from one corrupted network frame.
@@ -42,6 +49,9 @@ export const useVisualizationStore = defineStore('visualization', () => {
     socket.onmessage = (event) => {
       const msg = JSON.parse(event.data)
       if (msg.type === 'map') void queueMap(msg.data as MapWireSnapshot)
+      else if (msg.type === 'path' && msg.data.path_revision >= map.value.path_revision) {
+        map.value = { ...map.value, path: msg.data.path, path_revision: msg.data.path_revision }
+      }
     }
     socket.onclose = () => { if (!closed) reconnect = window.setTimeout(connect, 2000) }
   }
@@ -52,7 +62,7 @@ export const useVisualizationStore = defineStore('visualization', () => {
     catch { /* The periodic refresh below retries after backend startup. */ }
     try {
       const next = await robotApi.map()
-      if (next.revision >= map.value.revision) map.value = next
+      acceptMap(next)
     }
     catch { /* The map WebSocket retries independently. */ }
     try { navigation.value = await robotApi.navigationStatus() }

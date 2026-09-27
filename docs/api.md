@@ -46,7 +46,7 @@
 
 WebSocket `/ws/robot` 建立后立即发送 `robot_state` 完整快照。状态版本变化时发送新的完整快照，空闲时发送 `heartbeat`。
 
-`GET /api/visualization/map` 与 WebSocket `/ws/map` 独立传输 `/map` 与 `/plan` 组合快照，避免大尺寸栅格数据阻塞普通状态消息。栅格字段 `data` 使用 `data_encoding: "zlib-base64-int8"`：其内容是经 zlib 压缩、Base64 编码的 ROS `int8` OccupancyGrid；浏览器解码后得到与 `width × height` 一致的有符号单字节数组。该格式由本项目 Web 前端自动处理。
+`GET /api/visualization/map` 与 WebSocket `/ws/map` 独立传输 `/map` 与 `/plan`，避免大尺寸栅格数据阻塞普通状态消息。初始及地图变化时的 `map` 消息包含栅格和路径；路径单独变化时仅发送 `path` 消息，不重复发送地图。栅格字段 `data` 使用 `data_encoding: "zlib-base64-int8"`：其内容是经 zlib 压缩、Base64 编码的 ROS `int8` OccupancyGrid；浏览器解码后得到与 `width × height` 一致的有符号单字节数组。该格式由本项目 Web 前端自动处理。
 
 浏览器不能向运行管理接口提交命令内容。全部可执行任务及依赖关系均由服务端 `remote_runtime.tasks` 白名单配置决定。关闭仍被其他运行模块依赖的任务，或在依赖尚未运行时启动任务，都会被拒绝。`/api/runtime/start` 会在后台依次启动依赖已经就绪的模块；启动期间可以调用 `/api/runtime/stop` 中止流程并回收已经运行的模块。
 

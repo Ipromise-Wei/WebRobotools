@@ -45,6 +45,8 @@ async def map_websocket_endpoint(
 ) -> None:
     await websocket.accept()
     version, snapshot = await manager.transport_snapshot()
+    map_revision = snapshot["revision"]
+    path_revision = snapshot["path_revision"]
     try:
         await websocket.send_json({"type": "map", "version": version, "data": snapshot})
         while True:
@@ -56,6 +58,21 @@ async def map_websocket_endpoint(
                 await websocket.send_json({"type": "heartbeat", "version": version})
             else:
                 version = next_version
-                await websocket.send_json({"type": "map", "version": version, "data": snapshot})
+                if snapshot["revision"] != map_revision:
+                    map_revision = snapshot["revision"]
+                    path_revision = snapshot["path_revision"]
+                    await websocket.send_json({"type": "map", "version": version, "data": snapshot})
+                elif snapshot["path_revision"] != path_revision:
+                    path_revision = snapshot["path_revision"]
+                    await websocket.send_json(
+                        {
+                            "type": "path",
+                            "version": version,
+                            "data": {
+                                "path": snapshot["path"],
+                                "path_revision": path_revision,
+                            },
+                        }
+                    )
     except (WebSocketDisconnect, RuntimeError):
         return

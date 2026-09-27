@@ -14,6 +14,7 @@ class VisualizationService:
         self.manager, self.provider, self.interval = manager, provider, interval
         self.task: asyncio.Task[None] | None = None
         self.revision = -1
+        self.path_revision = -1
 
     async def start(self) -> None:
         if self.provider:
@@ -30,7 +31,11 @@ class VisualizationService:
     async def _poll(self) -> None:
         while True:
             snapshot = self.provider.get_map()
-            if snapshot.revision != self.revision:
+            if (
+                snapshot.revision != self.revision
+                or snapshot.path_revision != self.path_revision
+            ):
                 self.revision = snapshot.revision
+                self.path_revision = snapshot.path_revision
                 await self.manager.replace(snapshot)
             await asyncio.sleep(self.interval)

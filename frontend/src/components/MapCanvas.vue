@@ -326,7 +326,7 @@ function fullscreen() {
   else void root.value?.requestFullscreen()
 }
 
-watch(() => [props.map.revision, props.x, props.y, props.yaw], () => nextTick(draw))
+watch(() => [props.map.revision, props.map.path_revision, props.x, props.y, props.yaw], () => nextTick(draw))
 watch(navigation, () => nextTick(draw), { deep: true })
 onMounted(() => {
   resizeObserver = new ResizeObserver(draw)

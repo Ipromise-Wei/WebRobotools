@@ -19,6 +19,7 @@ class MapSnapshot(BaseModel):
     data: list[int] = Field(default_factory=list)
     path: list[Point2D] = Field(default_factory=list)
     revision: int = 0
+    path_revision: int = 0
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

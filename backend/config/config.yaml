@@ -30,8 +30,11 @@ ros2:
   battery_topic: /battery_state
   map_topic: /map
   # A full OccupancyGrid can contain millions of cells. The Web cache is
-  # refreshed at most once per second; ROS2/SLAM itself is not throttled.
-  map_snapshot_interval_s: 1.0
+  # refreshed at most every two seconds; ROS2/SLAM itself is not throttled.
+  map_snapshot_interval_s: 2.0
+  # The browser view is downsampled above this limit. Nav2 validation always
+  # retains the original-resolution map, so this does not weaken safety checks.
+  web_map_max_cells: 262144
   plan_topic: /plan
   navigate_to_pose_action: /navigate_to_pose
   navigation_active_topic: /webrobot/navigation/active

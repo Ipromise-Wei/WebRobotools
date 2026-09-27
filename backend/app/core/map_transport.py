@@ -13,7 +13,7 @@ from app.models.visualization import MapSnapshot
 MAP_DATA_ENCODING = "zlib-base64-int8"
 
 
-def encode_map_snapshot(snapshot: MapSnapshot) -> dict[str, Any]:
+def encode_map_grid(snapshot: MapSnapshot) -> dict[str, Any]:
     """Encode signed OccupancyGrid cells without JSON-expanding every cell.
 
     ROS OccupancyGrid values are signed int8 values in the range -1..100.
@@ -33,7 +33,17 @@ def encode_map_snapshot(snapshot: MapSnapshot) -> dict[str, Any]:
         "origin_yaw": snapshot.origin_yaw,
         "data_encoding": MAP_DATA_ENCODING,
         "data": encoded,
-        "path": [{"x": point.x, "y": point.y} for point in snapshot.path],
         "revision": snapshot.revision,
         "updated_at": snapshot.updated_at.isoformat(),
+    }
+
+
+def compose_map_payload(
+    grid_payload: dict[str, Any], snapshot: MapSnapshot
+) -> dict[str, Any]:
+    """Attach the current small Nav2 path without re-encoding the grid."""
+    return {
+        **grid_payload,
+        "path": [{"x": point.x, "y": point.y} for point in snapshot.path],
+        "path_revision": snapshot.path_revision,
     }

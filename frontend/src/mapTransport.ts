@@ -11,6 +11,7 @@ export interface MapSnapshot {
   data: Int8Array
   path: MapPoint[]
   revision: number
+  path_revision: number
   updated_at: string
 }
 
@@ -26,13 +27,14 @@ export interface MapWireSnapshot {
   data: string
   path: MapPoint[]
   revision: number
+  path_revision: number
   updated_at: string
 }
 
 export const emptyMap: MapSnapshot = {
   frame_id: 'map', width: 0, height: 0, resolution: .05,
   origin_x: 0, origin_y: 0, origin_yaw: 0, data: new Int8Array(),
-  path: [], revision: 0, updated_at: new Date().toISOString(),
+  path: [], revision: 0, path_revision: 0, updated_at: new Date().toISOString(),
 }
 
 function base64Bytes(value: string): Uint8Array {

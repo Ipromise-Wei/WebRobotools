@@ -35,7 +35,8 @@ class ROS2Settings(BaseModel):
     odom_topic: str = "/odom"
     battery_topic: str = "/battery_state"
     map_topic: str = "/map"
-    map_snapshot_interval_s: float = Field(default=1.0, ge=0.2, le=10.0)
+    map_snapshot_interval_s: float = Field(default=2.0, ge=0.2, le=10.0)
+    web_map_max_cells: int = Field(default=262_144, ge=32_768, le=1_048_576)
     plan_topic: str = "/plan"
     navigate_to_pose_action: str = "/navigate_to_pose"
     navigation_active_topic: str = "/webrobot/navigation/active"
