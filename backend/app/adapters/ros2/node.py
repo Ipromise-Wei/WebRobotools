@@ -38,6 +38,8 @@ class ROS2NodeAdapter:
         self._nav_goal_handle: Any = None
         self._nav_status = NavigationStatus()
         self._nav_generation = 0
+        self._nav_goal_timers: dict[int, threading.Timer] = {}
+        self._expired_nav_generations: set[int] = set()
 
     def start(self) -> None:
         try:
@@ -90,6 +92,14 @@ class ROS2NodeAdapter:
         if not self._running:
             return
         if self.config.allow_motion_commands:
+            with self._lock:
+                # Late action responses are stale after shutdown and must never
+                # restore a navigation state while ROS is being torn down.
+                self._nav_generation += 1
+                for timer in self._nav_goal_timers.values():
+                    timer.cancel()
+                self._nav_goal_timers.clear()
+                self._expired_nav_generations.clear()
             try:
                 self._cancel_navigation()
             except Exception as exc:
@@ -248,6 +258,68 @@ class ROS2NodeAdapter:
                 self._nav_status.phase = phase
                 self._nav_status.message = message
 
+    def _expire_navigation_goal_response(self, generation: int) -> None:
+        """Unlock manual control if Nav2 never acknowledges a submitted goal.
+
+        A delayed action response is still cancelled by its completion callback,
+        so a stale browser request can never start driving the robot later.
+        """
+        with self._lock:
+            self._nav_goal_timers.pop(generation, None)
+            if generation != self._nav_generation or self._nav_status.phase != "sending":
+                return
+            self._expired_nav_generations.add(generation)
+            self._nav_status.phase = "failed"
+            self._nav_status.message = "Nav2 目标确认超时，已拒绝本次导航请求"
+
+    def _goal_response(self, future: Any, generation: int) -> None:
+        with self._lock:
+            timer = self._nav_goal_timers.pop(generation, None)
+            if timer is not None:
+                timer.cancel()
+            expired = generation in self._expired_nav_generations
+            self._expired_nav_generations.discard(generation)
+            stale = expired or generation != self._nav_generation
+        try:
+            handle = future.result()
+        except Exception as exc:
+            if not stale:
+                with self._lock:
+                    if generation == self._nav_generation:
+                        self._nav_status.phase = "failed"
+                        self._nav_status.message = f"Nav2 目标响应异常：{exc}"
+            return
+        if not handle.accepted:
+            if not stale:
+                with self._lock:
+                    if generation == self._nav_generation:
+                        self._nav_status.phase = "failed"
+                        self._nav_status.message = "Nav2 拒绝导航目标"
+            return
+        if stale:
+            # The response arrived after its Web request was declared failed or
+            # after another request replaced it. Do not permit a late goal.
+            try:
+                handle.cancel_goal_async()
+            except Exception:
+                pass
+            return
+        with self._lock:
+            replaced = generation != self._nav_generation
+        if replaced:
+            try:
+                handle.cancel_goal_async()
+            except Exception:
+                pass
+            return
+        with self._lock:
+            self._nav_goal_handle = handle
+            self._nav_status.phase = "navigating"
+            self._nav_status.message = "导航中"
+        handle.get_result_async().add_done_callback(
+            lambda result: self._goal_result(result, generation)
+        )
+
     def _send_navigation_goal(self, x: float, y: float, yaw: float, frame_id: str) -> NavigationStatus:
         with self._nav_command_lock:
             return self._send_navigation_goal_locked(x, y, yaw, frame_id)
@@ -295,44 +367,16 @@ class ROS2NodeAdapter:
                 self._nav_status.phase = "failed"
                 self._nav_status.message = str(exc)
             raise MotionControlDisabled(str(exc)) from exc
-        accepted = threading.Event()
-        response.add_done_callback(lambda _: accepted.set())
-        if not accepted.wait(8):
-            # If Nav2 accepts after the HTTP timeout, cancel that late goal.
-            with self._lock:
-                self._nav_status.phase = "canceling"
-                self._nav_status.message = "目标确认超时，正在请求取消；取消确认前禁止手动驾驶"
-            def cancel_late(future: Any) -> None:
-                try:
-                    late_handle = future.result()
-                    if late_handle.accepted:
-                        with self._lock:
-                            self._nav_goal_handle = late_handle
-                        late_handle.get_result_async().add_done_callback(lambda result: self._goal_result(result, generation))
-                        late_handle.cancel_goal_async()
-                    else:
-                        with self._lock:
-                            self._nav_status.phase = "failed"
-                            self._nav_status.message = "Nav2 拒绝超时目标"
-                except Exception:
-                    pass
-            response.add_done_callback(cancel_late)
-            raise MotionControlDisabled("等待 Nav2 确认目标超时")
-        try:
-            handle = response.result()
-            if not handle.accepted:
-                raise MotionControlDisabled("Nav2 拒绝导航目标")
-            with self._lock:
-                self._nav_goal_handle = handle
-                self._nav_status.phase = "navigating"
-                self._nav_status.message = "导航中"
-            handle.get_result_async().add_done_callback(lambda future: self._goal_result(future, generation))
-            return self.navigation_status()
-        except Exception as exc:
-            with self._lock:
-                self._nav_status.phase = "failed"
-                self._nav_status.message = str(exc)
-            raise MotionControlDisabled(str(exc)) from exc
+        timer = threading.Timer(8.0, self._expire_navigation_goal_response, args=(generation,))
+        timer.daemon = True
+        with self._lock:
+            self._nav_goal_timers[generation] = timer
+        response.add_done_callback(lambda future: self._goal_response(future, generation))
+        timer.start()
+        # Action acceptance is asynchronous. Returning immediately keeps the
+        # HTTP interaction short; the status endpoint reports acceptance,
+        # rejection, completion, or the bounded confirmation timeout.
+        return self.navigation_status()
 
     async def send_navigation_goal(self, x: float, y: float, yaw: float, frame_id: str) -> NavigationStatus:
         return await asyncio.to_thread(self._send_navigation_goal, x, y, yaw, frame_id)

@@ -55,7 +55,7 @@ class RemoteRuntimeManager:
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             process.kill()
             await process.wait()
             raise RemoteRuntimeError("industrial PC command timed out") from None
@@ -79,7 +79,7 @@ class RemoteRuntimeManager:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(), timeout=15
                 )
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
                 raise RemoteRuntimeError(
@@ -98,7 +98,7 @@ class RemoteRuntimeManager:
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             process.kill()
             await process.wait()
             raise RemoteRuntimeError("上传地图到工控机超时") from None

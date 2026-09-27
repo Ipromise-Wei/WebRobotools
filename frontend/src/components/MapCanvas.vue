@@ -288,7 +288,11 @@ async function confirmGoal(goal: { x: number; y: number; yaw: number }) {
   try {
     navigation.value = await robotApi.navigateTo(goal.x, goal.y, goal.yaw, props.map.frame_id)
     goalMode.value = false
-  } catch (reason) { operationError.value = errorText(reason) }
+  } catch (reason) {
+    operationError.value = errorText(reason)
+    try { navigation.value = await robotApi.navigationStatus() }
+    catch { /* Keep the last server status if it is temporarily unavailable. */ }
+  }
   finally { operationBusy.value = false; draw() }
 }
 
