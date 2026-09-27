@@ -35,6 +35,7 @@ class ROS2Settings(BaseModel):
     odom_topic: str = "/odom"
     battery_topic: str = "/battery_state"
     map_topic: str = "/map"
+    map_snapshot_interval_s: float = Field(default=1.0, ge=0.2, le=10.0)
     plan_topic: str = "/plan"
     navigate_to_pose_action: str = "/navigate_to_pose"
     navigation_active_topic: str = "/webrobot/navigation/active"
@@ -62,7 +63,7 @@ class RealSenseSettings(BaseModel):
     input_format: Literal["yuyv422", "mjpeg"] = "yuyv422"
     width: int = Field(default=1280, ge=320, le=1920)
     height: int = Field(default=720, ge=240, le=1080)
-    fps: int = Field(default=30, ge=1, le=60)
+    fps: int = Field(default=15, ge=1, le=60)
     jpeg_quality: int = Field(default=82, ge=40, le=95)
     retry_interval_s: float = Field(default=2.0, ge=0.5, le=30)
 

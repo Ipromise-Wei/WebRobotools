@@ -29,6 +29,9 @@ ros2:
   odom_topic: /odom
   battery_topic: /battery_state
   map_topic: /map
+  # A full OccupancyGrid can contain millions of cells. The Web cache is
+  # refreshed at most once per second; ROS2/SLAM itself is not throttled.
+  map_snapshot_interval_s: 1.0
   plan_topic: /plan
   navigate_to_pose_action: /navigate_to_pose
   navigation_active_topic: /webrobot/navigation/active
@@ -47,7 +50,9 @@ visualization:
     input_format: yuyv422
     width: 1280
     height: 720
-    fps: 30
+    # 15 FPS is sufficient for monitoring and halves remote MJPEG encoding,
+    # network traffic, and browser decoding compared with the old 30 FPS.
+    fps: 15
     jpeg_quality: 82
     retry_interval_s: 2.0
 

@@ -23,6 +23,7 @@ class ROS2NodeAdapter:
         self._last_odom = 0.0
         self._last_map_pose = 0.0
         self._last_map = 0.0
+        self._last_map_snapshot = 0.0
         self._last_command = 0.0
         self._last_watchdog = 0.0
         self._velocity = (0.0, 0.0)
@@ -188,24 +189,62 @@ class ROS2NodeAdapter:
             self._last_map_pose = time.monotonic()
 
     def _on_map(self, message: Any) -> None:
+        now = time.monotonic()
+        # OccupancyGrid is usually the largest object in the process. Keep the
+        # latest ROS message fresh for navigation readiness, but only copy a
+        # full grid into the Web snapshot at a bounded cadence. This leaves
+        # SLAM untouched and prevents map copies from starving FastAPI's event
+        # loop while mapping.
+        with self._lock:
+            cached = self._map
+            self._last_map = now
+            geometry_changed = (
+                not cached.data
+                or cached.frame_id != (message.header.frame_id or "map")
+                or cached.width != message.info.width
+                or cached.height != message.info.height
+                or cached.resolution != message.info.resolution
+            )
+            if (
+                not geometry_changed
+                and now - self._last_map_snapshot < self.config.map_snapshot_interval_s
+            ):
+                return
+            path = cached.path
+            revision = cached.revision + 1
         q = message.info.origin.orientation
         origin_yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        # ROS messages are locally typed data. model_construct deliberately
+        # avoids Pydantic making a second full-size copy of the grid list.
+        snapshot = MapSnapshot.model_construct(
+            frame_id=message.header.frame_id or "map",
+            width=message.info.width,
+            height=message.info.height,
+            resolution=message.info.resolution,
+            origin_x=message.info.origin.position.x,
+            origin_y=message.info.origin.position.y,
+            origin_yaw=origin_yaw,
+            data=list(message.data),
+            path=path,
+            revision=revision,
+            updated_at=datetime.now(timezone.utc),
+        )
         with self._lock:
-            self._last_map = time.monotonic()
-            self._map = MapSnapshot(
-                frame_id=message.header.frame_id or "map", width=message.info.width,
-                height=message.info.height, resolution=message.info.resolution,
-                origin_x=message.info.origin.position.x, origin_y=message.info.origin.position.y,
-                origin_yaw=origin_yaw,
-                data=list(message.data), path=self._map.path,
-                revision=self._map.revision + 1, updated_at=datetime.now(timezone.utc),
-            )
+            self._map = snapshot
+            self._last_map_snapshot = now
 
     def _on_path(self, message: Any) -> None:
         with self._lock:
-            self._map.path = [Point2D(x=p.pose.position.x, y=p.pose.position.y) for p in message.poses]
-            self._map.revision += 1
-            self._map.updated_at = datetime.now(timezone.utc)
+            # Do not mutate a snapshot which might already be held by a map
+            # WebSocket response. The grid data itself is immutable after a
+            # snapshot is published, so this is intentionally a shallow copy.
+            self._map = self._map.model_copy(
+                update={
+                    "path": [Point2D(x=p.pose.position.x, y=p.pose.position.y) for p in message.poses],
+                    "revision": self._map.revision + 1,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
 
     def clear_map_cache(self) -> MapSnapshot:
         """Drop only the Web adapter's latest map and path, not SLAM's map."""
@@ -426,7 +465,9 @@ class ROS2NodeAdapter:
 
     def get_map(self) -> MapSnapshot:
         with self._lock:
-            return self._map.model_copy(deep=True)
+            # The map data list is never mutated after publication. Avoiding a
+            # deep copy here is essential for large SLAM occupancy grids.
+            return self._map.model_copy(deep=False)
 
     def is_running(self) -> bool:
         return self._running

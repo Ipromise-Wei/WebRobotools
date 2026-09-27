@@ -15,6 +15,7 @@ const error = ref('')
 const logs = ref<string[]>([])
 const showLogs = ref(false)
 let timer: ReturnType<typeof setInterval> | undefined
+let refreshInFlight = false
 
 const phaseText: Record<RuntimePhase, string> = {
   disabled: '未启用', unconfigured: '待初始化', offline: '离线', stopped: '全部关闭',
@@ -36,13 +37,15 @@ const dependencyText = (task: RuntimeTaskState) => task.dependencies.length
   : '独立'
 
 async function refresh(silent = true) {
+  if (refreshInFlight) return
+  refreshInFlight = true
   try {
     status.value = await robotApi.runtimeStatus()
     if (!silent) error.value = ''
   } catch (reason) {
     status.value = { ...emptyStatus, message: errorText(reason) }
     if (!silent) error.value = errorText(reason)
-  }
+  } finally { refreshInFlight = false }
 }
 
 async function toggleTask(task: RuntimeTaskState) {
@@ -106,7 +109,7 @@ async function toggleLogs() {
 
 onMounted(() => {
   void refresh(false)
-  timer = setInterval(() => void refresh(), 3000)
+  timer = setInterval(() => void refresh(), 5000)
 })
 onBeforeUnmount(() => timer && clearInterval(timer))
 </script>

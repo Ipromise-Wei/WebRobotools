@@ -15,6 +15,8 @@ export const useVisualizationStore = defineStore('visualization', () => {
   let reconnect: number | undefined
   let configPoll: number | undefined
   let navigationPoll: number | undefined
+  let configInFlight = false
+  let navigationInFlight = false
   let closed = false
 
   function connect() {
@@ -34,14 +36,20 @@ export const useVisualizationStore = defineStore('visualization', () => {
     catch { /* Status polling below retries. */ }
     if (configPoll) clearInterval(configPoll)
     configPoll = window.setInterval(async () => {
+      if (configInFlight) return
+      configInFlight = true
       try { config.value = await robotApi.visualizationConfig() }
       catch { /* The global robot connection indicator reports backend outages. */ }
-    }, 1000)
+      finally { configInFlight = false }
+    }, 2000)
     if (navigationPoll) clearInterval(navigationPoll)
     navigationPoll = window.setInterval(async () => {
+      if (navigationInFlight) return
+      navigationInFlight = true
       try { navigation.value = await robotApi.navigationStatus() }
       catch { /* Global backend state reports outages. */ }
-    }, 1500)
+      finally { navigationInFlight = false }
+    }, 2000)
   }
   function disconnect() {
     closed = true

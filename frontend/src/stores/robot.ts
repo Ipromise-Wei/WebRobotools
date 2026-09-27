@@ -27,6 +27,7 @@ export const useRobotStore = defineStore('robot', () => {
   const busy = ref(false)
   const error = ref('')
   let streamInFlight = false
+  let statusInFlight = false
   let statusRetry: number | undefined
   const socket = new RobotSocket<RobotState>(
     (nextState) => {
@@ -40,13 +41,15 @@ export const useRobotStore = defineStore('robot', () => {
   )
 
   async function refreshStatus() {
+    if (statusInFlight) return
+    statusInFlight = true
     try {
       state.value = await robotApi.status()
       error.value = ''
     }
     catch {
       if (!socketConnected.value) error.value = '无法连接后端，请确认服务已启动。'
-    }
+    } finally { statusInFlight = false }
   }
 
   async function initialize() {
