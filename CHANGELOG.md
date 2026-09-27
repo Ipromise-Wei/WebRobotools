@@ -1,5 +1,15 @@
 # 版本说明
 
+## v0.6.0 - 2026-09-28
+
+- 新增“手动建图”与“自动建图”两种受管运行方案。手动模式按依赖顺序启动底盘、雷达、FAST-LIO、SLAM Toolbox 与 Nav2；自动模式在导航就绪后启动 Frontier 探索器。
+- 自动建图以 `autostart:=false` 启动 Frontier，并由受管生命周期钩子调用 `frontier_exploration_ctl start`；停止时优先调用 `frontier_exploration_ctl stop`，再回收相关进程组。
+- 新增地图文件库：可将当前 `/map` 通过工控机 `nav2_map_server map_saver_cli` 保存为 ROS YAML + PGM 地图，也可从浏览器导入同格式地图。
+- 保存和导入的地图固定存储在工控机 `/home/hzauaiot/.local/share/webrobot/maps`；浏览器不能指定任意路径或远程命令。导入不会替换正在运行的 SLAM 地图。
+- 运行代理新增受配置约束的启动/停止钩子与运行方案，确保 Frontier 不会被默认“一键全启”隐式启动，手动建图切换时会先退出 Frontier。
+
+本版完整说明见 [v0.6.0 版本说明](docs/releases/v0.6.0.md)。
+
 ## v0.5.0 - 2026-09-22
 
 - 底盘地图新增 Web 地图/路径缓存清除按钮，不删除工控机上的 SLAM 地图。
