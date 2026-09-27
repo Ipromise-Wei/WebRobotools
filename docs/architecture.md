@@ -28,11 +28,12 @@ Pinia Store ──► 页面实时更新
 Web 运行面板 ──► Runtime API ──► RemoteRuntimeManager ──SSH──► 工控机运行代理
                                                                ├─ 底盘 / 雷达
                                                                ├─ FAST-LIO / LaserScan
-                                                               └─ SLAM Toolbox / Nav2
+                                                               ├─ SLAM Toolbox / Nav2
+                                                               └─ 实时通信中继
 
 工控机 ROS2 Topics
   ├─ /odom、/battery_state ──► StateManager ──► /ws/robot
-  ├─ /map、/plan ───────────► MapManager ────► /ws/map
+  ├─ /map、/plan ──本机──► 实时通信中继 ──► /webrobot/web_map、/webrobot/web_plan ──► MapManager ──► /ws/map
   └─ TF map→base_link ──────► 地图机器人位姿
 
 机械臂连接按钮 ──REST──► RobotManager ──► RealManArmController ──SSH stdio──► 工控机桥接器
@@ -40,7 +41,8 @@ Web 运行面板 ──► Runtime API ──► RemoteRuntimeManager ──SSH�
 
 工控机 RealSense ──V4L2/FFmpeg──► SSH JPEG 管道 ──► Web 单实例帧缓存 ──MJPEG──► 底盘页 / 机械臂页
 
-地图选点/朝向 ──► NavigateToPose Action ──► Nav2 速度平滑器 ──/webrobot/nav_cmd_vel──► 工控机速度看门狗 ──► /cmd_vel
+地图选点/朝向 ──小型 JSON──► 工控机实时通信中继 ──本机 NavigateToPose Action──► Nav2 速度平滑器 ──/webrobot/nav_cmd_vel──► 工控机速度看门狗 ──► /cmd_vel
+Web 请求关联租约 ──► 中继（10 秒失联后请求取消；不参与速度循环）
 工控机已配置 can0（UP、500000 bit/s） ──只读校验──► Ranger Mini V3 底盘任务
 ```
 
@@ -62,7 +64,8 @@ Web 运行面板 ──► Runtime API ──► RemoteRuntimeManager ──SSH�
 - 浏览器不直接连接工控机 SSH，也不能提交任意远程命令。
 - `RemoteRuntimeManager` 只下发服务端配置中的白名单任务。
 - 工控机代理为每个任务创建独立进程组，统一处理异常退出、停止和强制回收。
-- 实车速度控制要求工控机速度看门狗在线；Web、网络或看门狗任一环节中断后，底盘接收到的速度会在 0.5 秒内归零。
+- 手动实车速度控制要求工控机速度看门狗在线；Web 手动命令或本地 Nav2 速度超过 0.5 秒未更新时，底盘接收到的速度会归零。
+- 导航目标由工控机本地中继与本地 Nav2 Action 管理。Web 的请求关联控制租约在连续 10 秒未刷新时请求取消无人监管的目标，因此短暂网络抖动不会制造导航走停；该机制不替代物理急停。
 - RML63 运动只允许通过类型化接口提交；后端验证 Base 工作系、工具系、碰撞等级、控制器关节限位和 XYZ 工作空间。
 - RML63 链路只能由已登录用户在机械臂页面显式连接；后台状态轮询不会自行建立真机连接，断开后也不会被轮询重新打开。
 - 工控机桥接器从 `enp4s0` 地址建立机械臂 TCP 连接，并验证到控制器的内核路由确实使用该网口；Web 服务器不会绑定不存在于本机的工控机接口。

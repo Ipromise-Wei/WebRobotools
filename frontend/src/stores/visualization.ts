@@ -8,7 +8,7 @@ export interface VisualizationConfig { camera_stream_url: string; camera_enabled
 
 export const useVisualizationStore = defineStore('visualization', () => {
   const map = ref(emptyMap)
-  const config = ref<VisualizationConfig>({ camera_stream_url: '', camera_enabled: false, camera_connected: false, camera_serial: '', camera_error: '', map_topic: '/map', plan_topic: '/plan', motion_commands_enabled: false, navigation_ready: false, navigation_reason: '正在连接后端' })
+  const config = ref<VisualizationConfig>({ camera_stream_url: '', camera_enabled: false, camera_connected: false, camera_serial: '', camera_error: '', map_topic: '/webrobot/web_map', plan_topic: '/webrobot/web_plan', motion_commands_enabled: false, navigation_ready: false, navigation_reason: '正在连接后端' })
   const navigation = ref<NavigationStatus>({ phase: 'idle', message: '尚未设置导航目标', x: null, y: null, yaw: null })
   let socket: WebSocket | undefined
   let reconnect: number | undefined

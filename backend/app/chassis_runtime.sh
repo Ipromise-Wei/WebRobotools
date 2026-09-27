@@ -70,7 +70,7 @@ driver_pid=$!
   --input-topic /webrobot/cmd_vel \
   --output-topic /cmd_vel \
   --navigation-topic /webrobot/nav_cmd_vel \
-  --navigation-active-topic /webrobot/navigation/active \
+  --navigation-action /navigate_to_pose \
   --status-topic /webrobot/cmd_vel_watchdog/ready \
   --timeout 0.5 &
 watchdog_pid=$!

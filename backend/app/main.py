@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI):
 settings = get_settings()
 app = FastAPI(
     title=settings.server.app_name,
-    version="0.6.5",
+    version="0.7.0",
     lifespan=lifespan,
 )
 app.add_middleware(

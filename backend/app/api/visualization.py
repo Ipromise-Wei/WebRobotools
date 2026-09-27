@@ -88,15 +88,10 @@ async def navigation_goal(request: Request, goal: NavigationGoalRequest) -> Navi
     adapter = request.app.state.ros2_adapter
     if adapter is None or not request.app.state.settings.ros2.allow_motion_commands:
         raise HTTPException(status_code=423, detail="真机导航指令已锁定")
-    try:
-        runtime = await request.app.state.remote_runtime.status()
-    except OSError as exc:
-        raise HTTPException(status_code=423, detail=f"无法确认工控机安全模块状态：{exc}") from exc
-    running = {task.id for task in runtime.tasks if task.state == "running"}
-    if runtime.legacy_can0_active:
-        raise HTTPException(status_code=423, detail="旧版 Web CAN0 管理任务仍在运行，请先按现场流程退出旧任务并恢复 CAN0 后再导航")
-    if not runtime.reachable or not {"chassis", "navigation"}.issubset(running):
-        raise HTTPException(status_code=423, detail="请先确认工控机 CAN0 已由系统配置为 UP、500000 bit/s，并从模块面板启动底盘和 Nav2 导航")
+    # Do not put an SSH process-status request on the motion-critical path.
+    # The ROS2 adapter already requires fresh local watchdog, map/TF and
+    # industrial-PC relay readiness before it publishes a goal. The module
+    # panel continues to poll SSH status independently for operator feedback.
     return await adapter.send_navigation_goal(goal.x, goal.y, goal.yaw, goal.frame_id)
 
 

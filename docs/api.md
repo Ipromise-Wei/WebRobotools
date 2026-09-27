@@ -40,13 +40,13 @@
 | POST | `/api/runtime/tasks/{task_id}/restart` | 独立重启指定模块 |
 | GET | `/api/runtime/logs` | 最近运行日志，支持 `lines` 参数 |
 
-导航目标请求体为 `{ "x": 1.2, "y": 0.8, "yaw": 1.57, "frame_id": "map" }`；`x/y` 单位为米，`yaw` 单位为弧度。服务端要求工控机模块面板管理的底盘和 Nav2 均运行；底盘启动时只读验证工控机 `can0` 已是 UP、500000 bit/s。服务端拒绝地图外、未知或非空闲栅格目标，以及定位、速度看门狗、Nav2 Action Server 未就绪的目标；外部自行启动的 Nav2 实例不能用于 Web 地图目标。目标未确认取消或结束前，手动非零速度指令会被拒绝。
+导航目标请求体为 `{ "x": 1.2, "y": 0.8, "yaw": 1.57, "frame_id": "map" }`；`x/y` 单位为米，`yaw` 单位为弧度。目标接口不在关键路径同步 SSH 查询模块状态，而是要求新鲜的定位、工控机速度看门狗、地图中继和本地 Nav2 Action Server 就绪；底盘启动时仍只读验证工控机 `can0` 已是 UP、500000 bit/s。工控机中继会以原始本地地图拒绝地图外、未知或非空闲栅格目标。应仅使用模块面板启动配套的 `nav2_web_runtime.py`，避免另一个直接发布 `/cmd_vel` 的 Nav2 实例绕过安全链路。目标未确认取消或结束前，手动非零速度指令会被拒绝。
 
 除 `/api/auth/*` 与 `/health` 外，全部 REST API 均要求有效登录会话，未登录或会话过期返回 `401`。登录失败次数达到配置上限时返回 `429`。WebSocket `/ws/robot` 与 `/ws/map` 使用同一 HttpOnly Cookie 鉴权，未登录时以 `4401` 关闭连接；会话到期后，现有连接也会在下一次状态更新或心跳时关闭。
 
 WebSocket `/ws/robot` 建立后立即发送 `robot_state` 完整快照。状态版本变化时发送新的完整快照，空闲时发送 `heartbeat`。
 
-`GET /api/visualization/map` 与 WebSocket `/ws/map` 独立传输 `/map` 与 `/plan`，避免大尺寸栅格数据阻塞普通状态消息。初始及地图变化时的 `map` 消息包含栅格和路径；路径单独变化时仅发送 `path` 消息，不重复发送地图。栅格字段 `data` 使用 `data_encoding: "zlib-base64-int8"`：其内容是经 zlib 压缩、Base64 编码的 ROS `int8` OccupancyGrid；浏览器解码后得到与 `width × height` 一致的有符号单字节数组。该格式由本项目 Web 前端自动处理。
+`GET /api/visualization/map` 与 WebSocket `/ws/map` 独立传输工控机中继后的显示地图 `/webrobot/web_map` 与显示路径 `/webrobot/web_plan`，避免原始大尺寸栅格和完整 Nav2 路径阻塞普通状态消息。初始及地图变化时的 `map` 消息包含栅格和路径；路径单独变化时仅发送 `path` 消息，不重复发送地图。栅格字段 `data` 使用 `data_encoding: "zlib-base64-int8"`：其内容是经 zlib 压缩、Base64 编码的 ROS `int8` OccupancyGrid；浏览器解码后得到与 `width × height` 一致的有符号单字节数组。该格式由本项目 Web 前端自动处理。
 
 浏览器不能向运行管理接口提交命令内容。全部可执行任务及依赖关系均由服务端 `remote_runtime.tasks` 白名单配置决定。关闭仍被其他运行模块依赖的任务，或在依赖尚未运行时启动任务，都会被拒绝。`/api/runtime/start` 会在后台依次启动依赖已经就绪的模块；启动期间可以调用 `/api/runtime/stop` 中止流程并回收已经运行的模块。
 

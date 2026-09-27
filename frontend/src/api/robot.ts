@@ -71,8 +71,8 @@ export const robotApi = {
   clearMapCache: () => api.post<MapWireSnapshot>('/visualization/map/cache/clear').then((response) => decodeMapSnapshot(response.data)),
   navigationStatus: () => api.get<NavigationStatus>('/visualization/navigation/status').then((response) => response.data),
   navigateTo: (x: number, y: number, yaw: number, frame_id: string) =>
-    api.post<NavigationStatus>('/visualization/navigation/goal', { x, y, yaw, frame_id }, { timeout: 15000 }).then((response) => response.data),
-  cancelNavigation: () => api.post<NavigationStatus>('/visualization/navigation/cancel', {}, { timeout: 8000 }).then((response) => response.data),
+    api.post<NavigationStatus>('/visualization/navigation/goal', { x, y, yaw, frame_id }, { timeout: 6000 }).then((response) => response.data),
+  cancelNavigation: () => api.post<NavigationStatus>('/visualization/navigation/cancel', {}, { timeout: 6000 }).then((response) => response.data),
   runtimeStatus: () => api.get<RuntimeStatus>('/runtime/status', { timeout: 10000 }).then((response) => response.data),
   startRuntime: () => api.post<RuntimeActionResponse>('/runtime/start', {}, { timeout: 25000 }).then((response) => response.data),
   stopRuntime: () => api.post<RuntimeActionResponse>('/runtime/stop', {}, { timeout: 25000 }).then((response) => response.data),

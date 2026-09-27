@@ -34,16 +34,28 @@ class ROS2Settings(BaseModel):
     cmd_vel_topic: str = "/webrobot/cmd_vel"
     odom_topic: str = "/odom"
     battery_topic: str = "/battery_state"
-    map_topic: str = "/map"
-    map_snapshot_interval_s: float = Field(default=2.0, ge=0.2, le=10.0)
-    web_map_max_cells: int = Field(default=262_144, ge=32_768, le=1_048_576)
-    plan_topic: str = "/plan"
-    # Nav2 can publish long global plans many times per second. These limits
-    # apply only to the browser overlay; Nav2 retains its complete path.
-    path_snapshot_interval_s: float = Field(default=0.5, ge=0.1, le=10.0)
+    # These are bounded display topics emitted by the industrial-PC relay.
+    # The raw SLAM /map and /plan never cross the Web-server DDS connection.
+    map_topic: str = "/webrobot/web_map"
+    # The IPC relay owns the 1 Hz map cap; this short local guard only protects
+    # against a misconfigured relay without needlessly dropping its latest UI
+    # frame a second time.
+    map_snapshot_interval_s: float = Field(default=0.2, ge=0.2, le=10.0)
+    web_map_max_cells: int = Field(default=65_536, ge=4_096, le=1_048_576)
+    plan_topic: str = "/webrobot/web_plan"
+    # Nav2 can publish long global plans many times per second. The IPC relay
+    # owns the 0.5 Hz cap; this is only a local defensive guard.
+    path_snapshot_interval_s: float = Field(default=0.1, ge=0.1, le=10.0)
     web_path_max_points: int = Field(default=256, ge=2, le=4_096)
     executor_threads: int = Field(default=3, ge=2, le=4)
     navigate_to_pose_action: str = "/navigate_to_pose"
+    # Tiny JSON control messages and a request-correlated lease travel to the
+    # IPC relay. The relay validates the raw local map and calls NavigateToPose
+    # locally.
+    navigation_goal_topic: str = "/webrobot/navigation/goal"
+    navigation_cancel_topic: str = "/webrobot/navigation/cancel"
+    navigation_status_topic: str = "/webrobot/navigation/status"
+    navigation_ready_topic: str = "/webrobot/navigation/ready"
     navigation_active_topic: str = "/webrobot/navigation/active"
     allow_motion_commands: bool = False
     command_timeout: float = Field(default=0.5, ge=0.1, le=2.0)
@@ -54,10 +66,14 @@ class ROS2Settings(BaseModel):
     def validate_motion_topics(self) -> "ROS2Settings":
         if self.allow_motion_commands and (
             self.cmd_vel_topic != "/webrobot/cmd_vel"
+            or self.navigation_goal_topic != "/webrobot/navigation/goal"
+            or self.navigation_cancel_topic != "/webrobot/navigation/cancel"
+            or self.navigation_status_topic != "/webrobot/navigation/status"
+            or self.navigation_ready_topic != "/webrobot/navigation/ready"
             or self.navigation_active_topic != "/webrobot/navigation/active"
             or self.watchdog_status_topic != "/webrobot/cmd_vel_watchdog/ready"
         ):
-            raise ValueError("实车速度指令与导航心跳必须使用工控机看门狗的固定安全话题")
+            raise ValueError("实车速度、导航中继与看门狗必须使用工控机配套的固定安全话题")
         return self
 
 
@@ -69,8 +85,11 @@ class RealSenseSettings(BaseModel):
     input_format: Literal["yuyv422", "mjpeg"] = "yuyv422"
     width: int = Field(default=1280, ge=320, le=1920)
     height: int = Field(default=720, ge=240, le=1080)
-    fps: int = Field(default=15, ge=1, le=60)
-    jpeg_quality: int = Field(default=82, ge=40, le=95)
+    # A bounded preview must leave headroom for local Nav2 and avoid filling
+    # the Ethernet queue used by small control messages.
+    fps: int = Field(default=12, ge=1, le=60)
+    jpeg_quality: int = Field(default=70, ge=40, le=95)
+    max_frame_bytes: int = Field(default=800_000, ge=64_000, le=8_000_000)
     retry_interval_s: float = Field(default=2.0, ge=0.5, le=30)
 
 

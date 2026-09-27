@@ -1,9 +1,11 @@
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
+import json
 import math
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,7 +20,7 @@ class MotionControlDisabled(RuntimeError):
 
 @dataclass(frozen=True)
 class _NavigationGrid:
-    """Original-resolution grid retained solely for server-side safety checks."""
+    """Latest bounded relay grid used for UI readiness and display metadata."""
 
     frame_id: str
     width: int
@@ -52,54 +54,61 @@ class ROS2NodeAdapter:
         self._executor: Any = None
         self._publisher: Any = None
         self._twist: Any = None
-        self._nav_client: Any = None
         self._nav_active_publisher: Any = None
-        self._nav_goal_handle: Any = None
+        self._nav_goal_publisher: Any = None
+        self._nav_cancel_publisher: Any = None
         self._nav_status = NavigationStatus()
         self._nav_generation = 0
         self._nav_goal_timers: dict[int, threading.Timer] = {}
-        self._expired_nav_generations: set[int] = set()
+        self._expired_nav_request_ids: set[str] = set()
+        # Generation numbers restart with the Web process. The random session
+        # component prevents a delayed status/cancel from a previous process
+        # from being mistaken for a new goal with the same generation number.
+        self._nav_session = uuid.uuid4().hex
+        self._nav_request_id: str | None = None
+        self._last_navigation_relay_ready = 0.0
 
     def start(self) -> None:
         try:
             import rclpy
             from geometry_msgs.msg import Twist
-            from nav2_msgs.action import NavigateToPose
-            from geometry_msgs.msg import PoseStamped
-            from rclpy.action import ActionClient
-            from action_msgs.msg import GoalStatus
             from nav_msgs.msg import OccupancyGrid, Odometry, Path
             from rclpy.executors import MultiThreadedExecutor
             from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
             from rclpy.time import Time
             from sensor_msgs.msg import BatteryState
-            from std_msgs.msg import Bool
+            from std_msgs.msg import Bool, String
             from tf2_ros import Buffer, TransformListener
         except ImportError as exc:
             raise RuntimeError("ROS2 Python modules unavailable; use the ROS2 Python 3.10 launcher") from exc
         self._rclpy = rclpy
         self._twist = Twist
-        self._pose_stamped = PoseStamped
-        self._nav_action = NavigateToPose
-        self._goal_status = GoalStatus
         if not rclpy.ok():
             rclpy.init()
         self._node = rclpy.create_node(self.config.node_name)
         self._publisher = self._node.create_publisher(Twist, self.config.cmd_vel_topic, 10)
-        self._nav_client = ActionClient(self._node, NavigateToPose, self.config.navigate_to_pose_action)
-        self._nav_active_publisher = self._node.create_publisher(Bool, self.config.navigation_active_topic, 10)
-        self._bool = Bool
+        self._nav_active_publisher = self._node.create_publisher(String, self.config.navigation_active_topic, 10)
+        self._nav_goal_publisher = self._node.create_publisher(String, self.config.navigation_goal_topic, 10)
+        self._nav_cancel_publisher = self._node.create_publisher(String, self.config.navigation_cancel_topic, 10)
+        self._string = String
         self._ros_time = Time
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self._node)
         self._node.create_subscription(Odometry, self.config.odom_topic, self._on_odom, qos_profile_sensor_data)
         self._node.create_subscription(BatteryState, self.config.battery_topic, self._on_battery, qos_profile_sensor_data)
         self._node.create_subscription(Bool, self.config.watchdog_status_topic, self._on_watchdog, 10)
-        map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        # Relay frames are disposable display data.  Do not allow a delayed
+        # map fragment to queue/retransmit in front of navigation control.
+        map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.VOLATILE)
         self._node.create_subscription(OccupancyGrid, self.config.map_topic, self._on_map, map_qos)
-        self._node.create_subscription(Path, self.config.plan_topic, self._on_path, 10)
+        self._node.create_subscription(Path, self.config.plan_topic, self._on_path, map_qos)
+        self._node.create_subscription(String, self.config.navigation_status_topic, self._on_navigation_status, 10)
+        self._node.create_subscription(Bool, self.config.navigation_ready_topic, self._on_navigation_relay_ready, 10)
         self._node.create_timer(0.05, self._publish_velocity)
-        self._node.create_timer(0.1, self._publish_navigation_active)
+        # A navigation lease is intentionally low-rate. Motion stays local on
+        # the industrial PC; this only permits orderly remote cancellation if
+        # the Web server actually disappears.
+        self._node.create_timer(0.5, self._publish_navigation_active)
         self._node.create_timer(0.1, self._update_map_pose)
         self._executor = MultiThreadedExecutor(num_threads=self.config.executor_threads)
         self._executor.add_node(self._node)
@@ -111,29 +120,32 @@ class ROS2NodeAdapter:
         if not self._running:
             return
         if self.config.allow_motion_commands:
+            try:
+                self._cancel_navigation()
+            except Exception as exc:
+                # Shutdown must still stop the local watchdog signal even if
+                # the IPC relay cannot acknowledge cancellation.
+                self._node.get_logger().error(f"Nav2 cancellation during shutdown failed: {exc}")
+            # Let the small cancel command enter DDS before tearing down the
+            # publisher. This is not a navigation wait and never blocks normal
+            # request handling.
+            time.sleep(0.05)
             with self._lock:
-                # Late action responses are stale after shutdown and must never
-                # restore a navigation state while ROS is being torn down.
                 self._nav_generation += 1
                 for timer in self._nav_goal_timers.values():
                     timer.cancel()
                 self._nav_goal_timers.clear()
-                self._expired_nav_generations.clear()
-            try:
-                self._cancel_navigation()
-            except Exception as exc:
-                # Shutdown must still stop the watchdog heartbeat even if Nav2
-                # cannot acknowledge cancellation.
-                self._node.get_logger().error(f"Nav2 cancellation during shutdown failed: {exc}")
+                self._expired_nav_request_ids.clear()
             self.set_velocity(0.0, 0.0)
             self._publish_velocity()
             with self._lock:
                 self._nav_status.phase = "idle"
             self._publish_navigation_active()
+            with self._lock:
+                self._nav_request_id = None
         self._running = False
         self._executor.shutdown(timeout_sec=2.0)
         self._thread.join(timeout=2.0)
-        self._nav_client.destroy()
         self._node.destroy_node()
         if self._rclpy.ok():
             self._rclpy.shutdown()
@@ -165,8 +177,19 @@ class ROS2NodeAdapter:
     def _publish_navigation_active(self) -> None:
         with self._lock:
             active = self._nav_status.phase in {"sending", "navigating", "canceling"}
-        message = self._bool()
-        message.data = active
+            request_id = self._nav_request_id
+        # A request-correlated lease avoids an old ``false`` packet from a
+        # previous goal cancelling a newly accepted action on another DDS
+        # topic. The IPC relay only acts on a matching request id.
+        message = self._string()
+        message.data = json.dumps(
+            {
+                "active": active,
+                "request_id": request_id,
+                "session": self._nav_session,
+            },
+            separators=(",", ":"),
+        )
         self._nav_active_publisher.publish(message)
 
     def _on_odom(self, message: Any) -> None:
@@ -192,6 +215,44 @@ class ROS2NodeAdapter:
         with self._lock:
             self._last_watchdog = time.monotonic() if bool(message.data) else 0.0
 
+    def _on_navigation_relay_ready(self, message: Any) -> None:
+        if bool(message.data):
+            with self._lock:
+                self._last_navigation_relay_ready = time.monotonic()
+
+    def _on_navigation_status(self, message: Any) -> None:
+        """Apply a status emitted by the industrial-PC navigation relay."""
+        try:
+            payload = json.loads(message.data)
+            generation = int(payload["generation"])
+            request_id = str(payload["request_id"])
+            status = NavigationStatus(
+                phase=str(payload["phase"]),
+                message=str(payload["message"]),
+                x=payload.get("x"),
+                y=payload.get("y"),
+                yaw=payload.get("yaw"),
+            )
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+            self._node.get_logger().warning("ignored malformed IPC navigation status")
+            return
+        with self._lock:
+            if generation != self._nav_generation:
+                return
+            if request_id != self._nav_request_id:
+                return
+            if request_id in self._expired_nav_request_ids:
+                return
+            # The relay reports its own "sending" state before Nav2 accepts a
+            # goal. Keep the confirmation timer alive until a real outcome or
+            # an accepted, navigating state is reported.
+            if status.phase != "sending":
+                timer = self._nav_goal_timers.pop(generation, None)
+                if timer is not None:
+                    timer.cancel()
+            self._expired_nav_request_ids.discard(request_id)
+            self._nav_status = status
+
     def _update_map_pose(self) -> None:
         try:
             transform = self._tf_buffer.lookup_transform("map", "base_link", self._ros_time())
@@ -208,11 +269,9 @@ class ROS2NodeAdapter:
 
     def _on_map(self, message: Any) -> None:
         now = time.monotonic()
-        # OccupancyGrid is usually the largest object in the process. Keep the
-        # latest ROS message fresh for navigation readiness, but only copy a
-        # full grid into the Web snapshot at a bounded cadence. This leaves
-        # SLAM untouched and prevents map copies from starving FastAPI's event
-        # loop while mapping.
+        # The industrial-PC relay has already bounded this display map before
+        # it crossed the network. Keep its latest reference and avoid any
+        # additional copies on FastAPI's ROS callback path.
         with self._lock:
             cached = self._navigation_grid
             self._last_map = now
@@ -232,10 +291,8 @@ class ROS2NodeAdapter:
             revision = self._map.revision + 1
         q = message.info.origin.orientation
         origin_yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        # rclpy exposes int8 occupancy values as an immutable-by-convention
-        # sequence owned by this message instance. Retain that sequence for
-        # exact Nav2 validation instead of copying a huge map into Python.
-        # The browser receives only a bounded, downsampled grid.
+        # Goal safety is checked against the raw local map by the industrial
+        # relay. The Web server only keeps this bounded display grid.
         source_data: Sequence[int] = message.data
         expected_cells = message.info.width * message.info.height
         if len(source_data) != expected_cells:
@@ -361,90 +418,38 @@ class ROS2NodeAdapter:
         if abs(manual_velocity[0]) > .001 or abs(manual_velocity[1]) > .001:
             return False, "请先松开手动驾驶控制"
         if grid is None or not grid.data or grid.frame_id != "map":
-            return False, "等待 map 坐标系的 SLAM 地图"
+            return False, "等待工控机地图中继"
         if time.monotonic() - last_map > 30.0:
             return False, "地图已超过 30 秒未更新"
         if abs(grid.origin_yaw) > .001:
             return False, "地图原点带旋转，当前选点暂不支持"
-        if not self._nav_client.server_is_ready():
-            return False, "等待 Nav2 导航模块就绪"
+        with self._lock:
+            relay_ready_at = self._last_navigation_relay_ready
+        if time.monotonic() - relay_ready_at > 2.0:
+            return False, "等待工控机本地导航中继与 Nav2 就绪"
         return True, "导航条件已就绪"
 
-    def _goal_result(self, future: Any, generation: int) -> None:
-        try:
-            result = future.result()
-            succeeded = result.status == self._goal_status.STATUS_SUCCEEDED
-            phase = "succeeded" if succeeded else "canceled" if result.status == self._goal_status.STATUS_CANCELED else "failed"
-            message = "已到达目标" if succeeded else "导航已取消" if phase == "canceled" else f"导航失败，状态码 {result.status}"
-        except Exception as exc:
-            phase, message = "failed", f"导航结果异常：{exc}"
-        with self._lock:
-            if generation == self._nav_generation:
-                self._nav_goal_handle = None
-                self._nav_status.phase = phase
-                self._nav_status.message = message
-
-    def _expire_navigation_goal_response(self, generation: int) -> None:
-        """Unlock manual control if Nav2 never acknowledges a submitted goal.
-
-        A delayed action response is still cancelled by its completion callback,
-        so a stale browser request can never start driving the robot later.
-        """
+    def _expire_navigation_goal_response(self, generation: int, request_id: str) -> None:
+        """Unlock manual control if the IPC relay never acknowledges a goal."""
+        expired = False
         with self._lock:
             self._nav_goal_timers.pop(generation, None)
-            if generation != self._nav_generation or self._nav_status.phase != "sending":
+            if (
+                generation != self._nav_generation
+                or request_id != self._nav_request_id
+                or self._nav_status.phase != "sending"
+            ):
                 return
-            self._expired_nav_generations.add(generation)
+            self._expired_nav_request_ids.add(request_id)
             self._nav_status.phase = "failed"
-            self._nav_status.message = "Nav2 目标确认超时，已拒绝本次导航请求"
-
-    def _goal_response(self, future: Any, generation: int) -> None:
-        with self._lock:
-            timer = self._nav_goal_timers.pop(generation, None)
-            if timer is not None:
-                timer.cancel()
-            expired = generation in self._expired_nav_generations
-            self._expired_nav_generations.discard(generation)
-            stale = expired or generation != self._nav_generation
-        try:
-            handle = future.result()
-        except Exception as exc:
-            if not stale:
-                with self._lock:
-                    if generation == self._nav_generation:
-                        self._nav_status.phase = "failed"
-                        self._nav_status.message = f"Nav2 目标响应异常：{exc}"
-            return
-        if not handle.accepted:
-            if not stale:
-                with self._lock:
-                    if generation == self._nav_generation:
-                        self._nav_status.phase = "failed"
-                        self._nav_status.message = "Nav2 拒绝导航目标"
-            return
-        if stale:
-            # The response arrived after its Web request was declared failed or
-            # after another request replaced it. Do not permit a late goal.
-            try:
-                handle.cancel_goal_async()
-            except Exception:
-                pass
-            return
-        with self._lock:
-            replaced = generation != self._nav_generation
-        if replaced:
-            try:
-                handle.cancel_goal_async()
-            except Exception:
-                pass
-            return
-        with self._lock:
-            self._nav_goal_handle = handle
-            self._nav_status.phase = "navigating"
-            self._nav_status.message = "导航中"
-        handle.get_result_async().add_done_callback(
-            lambda result: self._goal_result(result, generation)
-        )
+            self._nav_status.message = "工控机导航中继确认超时，已拒绝本次导航请求"
+            expired = True
+        if expired:
+            payload = self._string()
+            payload.data = json.dumps(
+                {"generation": generation, "request_id": request_id}, separators=(",", ":")
+            )
+            self._nav_cancel_publisher.publish(payload)
 
     def _send_navigation_goal(self, x: float, y: float, yaw: float, frame_id: str) -> NavigationStatus:
         with self._nav_command_lock:
@@ -455,53 +460,49 @@ class ROS2NodeAdapter:
         if not ready:
             raise MotionControlDisabled(reason)
         with self._lock:
-            grid = self._navigation_grid
             if self._nav_status.phase in {"sending", "navigating", "canceling"}:
                 raise MotionControlDisabled("已有导航目标，请先取消")
-            if grid is None or not grid.data or grid.frame_id != frame_id or grid.resolution <= 0:
-                raise MotionControlDisabled("没有与目标坐标系匹配的地图")
-            if time.monotonic() - self._last_map > 30.0:
-                raise MotionControlDisabled("地图数据已超过 30 秒未更新，禁止发送导航目标")
             if abs(self._velocity[0]) > .001 or abs(self._velocity[1]) > .001:
                 raise MotionControlDisabled("请先释放手动驾驶控制，再设置导航目标")
-            if abs(grid.origin_yaw) > .001:
-                raise MotionControlDisabled("地图原点存在旋转，当前 Web 地图暂不支持安全选点")
-            column = math.floor((x - grid.origin_x) / grid.resolution)
-            row = math.floor((y - grid.origin_y) / grid.resolution)
-            if not 0 <= column < grid.width or not 0 <= row < grid.height:
-                raise MotionControlDisabled("导航目标在地图范围外")
-            if grid.data[row * grid.width + column] != 0:
-                raise MotionControlDisabled("目标点不是已知空闲区域")
-        if not self._nav_client.server_is_ready():
-            raise MotionControlDisabled("Nav2 NavigateToPose action 未就绪，请先开启导航模块")
-        goal = self._nav_action.Goal()
-        goal.pose = self._pose_stamped()
-        goal.pose.header.frame_id = frame_id
-        goal.pose.header.stamp = self._node.get_clock().now().to_msg()
-        goal.pose.pose.position.x = x
-        goal.pose.pose.position.y = y
-        goal.pose.pose.orientation.z = math.sin(yaw / 2)
-        goal.pose.pose.orientation.w = math.cos(yaw / 2)
-        with self._lock:
             self._nav_generation += 1
             generation = self._nav_generation
-            self._nav_status = NavigationStatus(phase="sending", message="等待 Nav2 接收目标", x=x, y=y, yaw=yaw)
-        try:
-            response = self._nav_client.send_goal_async(goal)
-        except Exception as exc:
-            with self._lock:
-                self._nav_status.phase = "failed"
-                self._nav_status.message = str(exc)
-            raise MotionControlDisabled(str(exc)) from exc
-        timer = threading.Timer(8.0, self._expire_navigation_goal_response, args=(generation,))
+            request_id = f"{self._nav_session}:{generation}"
+            self._nav_request_id = request_id
+            self._nav_status = NavigationStatus(
+                phase="sending", message="正在发送到工控机本地导航中继", x=x, y=y, yaw=yaw
+            )
+        payload = self._string()
+        payload.data = json.dumps(
+            {
+                "generation": generation,
+                "request_id": request_id,
+                "x": x,
+                "y": y,
+                "yaw": yaw,
+                "frame_id": frame_id,
+            },
+            separators=(",", ":"),
+        )
+        timer = threading.Timer(
+            8.0, self._expire_navigation_goal_response, args=(generation, request_id)
+        )
         timer.daemon = True
         with self._lock:
             self._nav_goal_timers[generation] = timer
-        response.add_done_callback(lambda future: self._goal_response(future, generation))
         timer.start()
-        # Action acceptance is asynchronous. Returning immediately keeps the
-        # HTTP interaction short; the status endpoint reports acceptance,
-        # rejection, completion, or the bounded confirmation timeout.
+        try:
+            self._nav_goal_publisher.publish(payload)
+        except Exception as exc:
+            timer.cancel()
+            with self._lock:
+                self._nav_goal_timers.pop(generation, None)
+                if self._nav_generation == generation and self._nav_request_id == request_id:
+                    self._nav_status.phase = "failed"
+                    self._nav_status.message = f"工控机导航中继消息发送失败：{exc}"
+            raise MotionControlDisabled(f"工控机导航中继消息发送失败：{exc}") from exc
+        # The IPC relay validates the original local OccupancyGrid and talks to
+        # Nav2 locally. Returning immediately keeps HTTP short and lets status
+        # arrive on a small, independent DDS topic.
         return self.navigation_status()
 
     async def send_navigation_goal(self, x: float, y: float, yaw: float, frame_id: str) -> NavigationStatus:
@@ -513,32 +514,20 @@ class ROS2NodeAdapter:
 
     def _cancel_navigation_locked(self) -> NavigationStatus:
         with self._lock:
-            handle = self._nav_goal_handle
-            if handle is None:
-                if self._nav_status.phase in {"sending", "canceling"}:
-                    raise MotionControlDisabled("Nav2 目标确认或取消尚未完成，请使用现场硬件急停")
+            if self._nav_status.phase not in {"sending", "navigating", "canceling"}:
                 return self._nav_status.model_copy(deep=True)
-            self._nav_status.message = "正在取消导航"
-        response = handle.cancel_goal_async()
-        completed = threading.Event()
-        response.add_done_callback(lambda _: completed.set())
-        if not completed.wait(5):
-            raise MotionControlDisabled("Nav2 取消目标超时，请使用现场急停")
-        with self._lock:
-            if self._nav_goal_handle is not handle:
-                return self._nav_status.model_copy(deep=True)
-        try:
-            accepted_cancel = bool(response.result().goals_canceling)
-        except Exception as exc:
-            raise MotionControlDisabled(f"Nav2 取消目标异常：{exc}；请使用现场急停") from exc
-        if not accepted_cancel:
-            raise MotionControlDisabled("Nav2 未确认取消目标，请使用现场急停")
-        with self._lock:
-            if self._nav_goal_handle is not handle:
-                return self._nav_status.model_copy(deep=True)
+            generation = self._nav_generation
+            request_id = self._nav_request_id
             self._nav_status.phase = "canceling"
-            self._nav_status.message = "Nav2 已接收取消请求，等待目标结束"
-            return self._nav_status.model_copy(deep=True)
+            self._nav_status.message = "正在请求工控机取消导航"
+        if request_id is None:
+            raise MotionControlDisabled("导航请求标识丢失，请使用现场硬件急停")
+        payload = self._string()
+        payload.data = json.dumps(
+            {"generation": generation, "request_id": request_id}, separators=(",", ":")
+        )
+        self._nav_cancel_publisher.publish(payload)
+        return self.navigation_status()
 
     async def cancel_navigation(self) -> NavigationStatus:
         return await asyncio.to_thread(self._cancel_navigation)

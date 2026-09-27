@@ -32,7 +32,7 @@ async def _run_api_scenario() -> None:
 
                 visual = await client.get("/api/visualization/config")
                 assert visual.status_code == 200
-                assert visual.json()["map_topic"] == "/map"
+                assert visual.json()["map_topic"] == "/webrobot/web_map"
                 assert visual.json()["motion_commands_enabled"] is False
 
                 runtime = await client.get("/api/runtime/status")

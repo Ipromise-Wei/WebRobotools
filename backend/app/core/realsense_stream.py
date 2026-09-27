@@ -217,6 +217,12 @@ class RealSenseStream:
             "-hide_banner",
             "-loglevel", "error",
             "-nostdin",
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            # Do not let FFmpeg queue old camera buffers while the server or
+            # network is briefly busy. A monitoring UI should show the newest
+            # image, never replay a backlog.
+            "-thread_queue_size", "1",
             "-f", "v4l2",
             "-input_format", self.settings.input_format,
             "-video_size", f"{self.settings.width}x{self.settings.height}",
@@ -226,6 +232,7 @@ class RealSenseStream:
             "-c:v", "mjpeg",
             "-q:v", str(quality),
             "-f", "image2pipe",
+            "-flush_packets", "1",
             "pipe:1",
         ]
         remote_command = " ".join(shlex.quote(argument) for argument in ffmpeg)
@@ -265,6 +272,7 @@ class RealSenseStream:
                 if not chunk:
                     break
                 buffer.extend(chunk)
+                latest: bytes | None = None
                 while True:
                     start = buffer.find(b"\xff\xd8")
                     if start < 0:
@@ -280,7 +288,14 @@ class RealSenseStream:
                         break
                     jpeg = bytes(buffer[start:end + 2])
                     del buffer[:end + 2]
-                    self._publish(jpeg, label)
+                    if len(jpeg) <= self.settings.max_frame_bytes:
+                        # If multiple complete images accumulated in one read,
+                        # emit only the newest one. Sending stale frames first
+                        # produces visible latency and needlessly competes with
+                        # navigation traffic on the SSH/TCP connection.
+                        latest = jpeg
+                if latest is not None:
+                    self._publish(latest, label)
 
             if not self._stop.is_set():
                 try:

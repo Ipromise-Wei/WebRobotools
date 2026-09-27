@@ -1,6 +1,6 @@
 # HZAU@AIOT农业AI机器人协同工作平台
 
-面向移动操作机器人的 Web 一体化控制框架。当前开发版本已支持 ROS2 Humble 实机状态接入、工控机模块管理、安全连续驾驶、RML63 真机机械臂控制，以及 SLAM 地图、Nav2 路径、机器人位姿和摄像头的单页可视化。
+面向移动操作机器人的 Web 一体化控制框架。当前开发版本已支持 ROS2 Humble 实机状态接入、工控机模块管理、安全连续驾驶、RML63 真机机械臂控制，以及 SLAM 地图、Nav2 路径、机器人位姿和摄像头的单页可视化。导航控制、原始地图和完整路径均在工控机本地处理，Web 端只接收有边界的显示遥测数据。
 
 ## 当前功能
 
@@ -12,7 +12,7 @@
 - 统一 `RobotManager` 与 `StateManager`
 - `/ws/robot` 实时状态推送
 - Dashboard、底盘、机械臂工作站、夹爪和系统状态页面
-- 移动底盘页内嵌 `/map`、Nav2 路径、机器人位姿和摄像头窗口
+- 移动底盘页内嵌工控机中继地图/路径、机器人位姿和摄像头窗口
 - 手动建图、Frontier 自动建图、停止建图与地图文件库管理
 - 当前 `/map` 的 ROS YAML + PGM 保存，以及 YAML + PGM 地图文件手动导入
 - RViz 风格地图交互：缩放、平移、跟随机器人、全屏和图层开关
@@ -53,15 +53,17 @@ python3 scripts/set_admin_password.py
 
 ## 工控机导航与建图
 
-底盘、雷达、定位、建图和 Nav2 由移动底盘页面的模块面板按依赖顺序启动。原有 `/home/hzauaiot/songwei/start_mapping.sh` 不应与 Web 模块面板同时运行，否则可能出现重复节点和直接写入 `/cmd_vel` 的速度发布者。Web 服务器加入同一 ROS2 Domain 后，订阅：
+底盘、雷达、定位、建图和 Nav2 由移动底盘页面的模块面板按依赖顺序启动。原有 `/home/hzauaiot/songwei/start_mapping.sh` 不应与 Web 模块面板同时运行，否则可能出现重复节点和直接写入 `/cmd_vel` 的速度发布者。Web 服务器加入同一 ROS2 Domain 后，只接收以下小型状态或有边界的显示数据：
 
 底盘工作站提供地图缓存清除、地图点选/拖动朝向的 Nav2 目标导航与取消。Web 不再启停或重配工控机 `can0`；底盘启动前只读确认它已处于 UP、500000 bit/s。导航速度统一经过工控机速度看门狗；CAN0 前置条件与安全链路说明见 [底盘模块](docs/chassis.md)。
 
 - `/odom`：速度与轮式里程计
 - `/battery_state`：电池状态
-- `/map`：SLAM Toolbox 二维地图
-- `/plan`：Nav2 全局路径
+- `/webrobot/web_map`：由工控机实时通信中继限频、限尺寸后的 SLAM 显示地图
+- `/webrobot/web_plan`：由工控机实时通信中继采样后的 Nav2 显示路径
 - TF `map → base_link`：机器人在地图中的实时位置
+
+工控机中继在本机读取原始 `/map`、完整 `/plan`，并在本机完成 Nav2 `NavigateToPose` 的目标校验与 Action 调用。因此原始大地图、完整路径和 Nav2 控制循环不再与 Web 视频/浏览器显示争用跨网 DDS 传输。
 
 第一次准备 ROS2 后端：
 
@@ -84,6 +86,8 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 - **手动建图**：按依赖顺序启动底盘、雷达、FAST-LIO、点云转激光、SLAM Toolbox 和 Nav2；操作者使用页面中的虚拟摇杆或键盘驾驶机器人完成建图。
 - **自动建图**：在上述模块就绪后启动 `frontier_exploration_ros2`，并通过其控制服务显式开始 Frontier 探索。切换回手动建图或点击“停止建图”时，系统先请求 Frontier 停止，再回收本次建图的进程。
 
+两种方案都会先启动“工控机实时通信中继”，再启动 Nav2。升级到新版本后请先停止当前建图任务、等待全部模块停止，再重新启动方案，以便把中继和速度看门狗的新脚本部署到工控机。
+
 自动建图需要工控机已构建 `/home/hzauaiot/songwei/frontier_ws`，并具备 `frontier_exploration_ros2` 和 `nav2_map_server`。开始自动探索前，必须清空作业区域、确认现场物理急停有效，并全程安排现场人员监控。Web 停止、Frontier 停止和速度看门狗均不替代硬件急停。
 
 ### 保存与导入地图
@@ -98,7 +102,7 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 
 这些模块开关常驻移动底盘页面右侧控制栏。运动区可在虚拟摇杆和键盘模式之间切换：摇杆按住拖动可同时控制线速度和角速度；键盘模式可按住方向键或 `W/A/S/D` 持续驾驶，并可组合前进与转弯。松键、松开摇杆、页面失焦或触控中断即停车；控制区的空格键可请求停止运动或取消导航，但不能替代现场硬件急停。地图窗口支持鼠标拖拽、滚轮缩放、双击跟随机器人、视图复位、全屏显示、图层显隐以及地图坐标查看。
 
-远程控制要求 Web 服务器已经配置到工控机的免密 SSH 登录。运行接口只接受启动、停止、重启和日志查询，不接受来自浏览器的任意 Shell 命令。实车速度首先发布到 `/webrobot/cmd_vel`，再由工控机侧看门狗转发至 `/cmd_vel`；命令超过 0.5 秒未更新时，看门狗会持续向底盘发送零速度。
+远程控制要求 Web 服务器已经配置到工控机的免密 SSH 登录。运行接口只接受启动、停止、重启和日志查询，不接受来自浏览器的任意 Shell 命令。手动实车速度首先发布到 `/webrobot/cmd_vel`，再由工控机侧看门狗转发至 `/cmd_vel`；命令超过 0.5 秒未更新时，看门狗会持续向底盘发送零速度。导航目标则由工控机本地中继提交给 Nav2，Nav2 的本地速度同样在 0.5 秒无更新时归零；Web 服务的请求关联控制租约只在持续 10 秒失联后请求取消无人监管的目标，不会因瞬时视频或地图网络抖动造成走停。
 
 ## RML63 真机机械臂
 
@@ -115,7 +119,7 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 - 机械臂停止与夹爪 IO 释放的组合停止操作；
 - 末端相机画面入口，视频流地址沿用 `visualization.camera_stream_url`。
 
-`visualization.realsense.enabled` 默认启用。当前配置由工控机使用 FFmpeg 从 D435 彩色节点 `/dev/video4` 采集 `1280×720@15fps`，经过 SSH 视频管道传到 Web 后端，再由 `/api/visualization/camera/stream` 输出共享 MJPEG；机械臂页和底盘页复用同一视频源。该接口不生成模拟帧。若把 `source` 改为 `local`，则改用 Web 服务器本机的 `pyrealsense2` 采集。安装本机采集依赖后需要重新执行：
+`visualization.realsense.enabled` 默认启用。当前配置由工控机使用 FFmpeg 从 D435 彩色节点 `/dev/video4` 采集 `1280×720@12fps`、JPEG 质量 70 的低延迟预览，经过 SSH 视频管道传到 Web 后端，再由 `/api/visualization/camera/stream` 输出共享 MJPEG；机械臂页和底盘页复用同一视频源。采集和服务端转发均只保留最新帧，超过 800 KB 的显示帧会丢弃。该接口不生成模拟帧。若把 `source` 改为 `local`，则改用 Web 服务器本机的 `pyrealsense2` 采集。安装本机采集依赖后需要重新执行：
 
 ```bash
 ./scripts/setup_ros2_backend.sh
@@ -132,6 +136,14 @@ cd backend && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest
 cd frontend && npm run build
 ```
 
+在安装 ROS 2 Humble 的服务器上，后端应使用 ROS Python 3.10 虚拟环境；首次执行测试时安装开发依赖：
+
+```bash
+cd backend
+./.venv-ros2/bin/pip install -r requirements-dev.txt
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv-ros2/bin/pytest
+```
+
 系统边界及接口约定见 [docs/architecture.md](docs/architecture.md) 和 [docs/api.md](docs/api.md)。
 
-每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.6.5 版本说明](docs/releases/v0.6.5.md)。
+每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.7.0 版本说明](docs/releases/v0.7.0.md)。

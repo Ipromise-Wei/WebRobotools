@@ -25,6 +25,7 @@ class RemoteRuntimeManager:
         self._watchdog_source = Path(__file__).resolve().parents[1] / "cmd_vel_watchdog.py"
         self._chassis_runtime_source = Path(__file__).resolve().parents[1] / "chassis_runtime.sh"
         self._nav2_source = Path(__file__).resolve().parents[1] / "nav2_web_runtime.py"
+        self._telemetry_relay_source = Path(__file__).resolve().parents[1] / "telemetry_relay.py"
         self._arm_bridge_source = Path(__file__).resolve().parents[1] / "arm_tcp_bridge.py"
         self._arm_bridge_deployed = False
 
@@ -121,6 +122,7 @@ class RemoteRuntimeManager:
             (self._agent_source, self.settings.agent_path),
             (self._watchdog_source, f"{remote_dir}/cmd_vel_watchdog.py"),
             (self._nav2_source, f"{remote_dir}/nav2_web_runtime.py"),
+            (self._telemetry_relay_source, f"{remote_dir}/telemetry_relay.py"),
             (self._chassis_runtime_source, f"{remote_dir}/chassis_runtime.sh"),
         ])
         self._arm_bridge_deployed = True

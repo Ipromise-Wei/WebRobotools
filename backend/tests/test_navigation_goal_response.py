@@ -1,37 +1,22 @@
+import json
 import threading
+from types import SimpleNamespace
 
 from app.adapters.ros2.node import ROS2NodeAdapter
 from app.models.visualization import NavigationStatus
 
 
-class FakeResultFuture:
+class FakeString:
     def __init__(self) -> None:
-        self.callback = None
-
-    def add_done_callback(self, callback):  # type: ignore[no-untyped-def]
-        self.callback = callback
+        self.data = ""
 
 
-class FakeGoalHandle:
-    accepted = True
-
+class RecordingPublisher:
     def __init__(self) -> None:
-        self.cancelled = False
-        self.result_future = FakeResultFuture()
+        self.messages: list[str] = []
 
-    def cancel_goal_async(self) -> None:
-        self.cancelled = True
-
-    def get_result_async(self) -> FakeResultFuture:
-        return self.result_future
-
-
-class FakeGoalResponse:
-    def __init__(self, handle: FakeGoalHandle) -> None:
-        self.handle = handle
-
-    def result(self) -> FakeGoalHandle:
-        return self.handle
+    def publish(self, message: FakeString) -> None:
+        self.messages.append(message.data)
 
 
 class FakeTimer:
@@ -46,32 +31,69 @@ def adapter_with_pending_goal() -> ROS2NodeAdapter:
     adapter = ROS2NodeAdapter.__new__(ROS2NodeAdapter)
     adapter._lock = threading.Lock()
     adapter._nav_goal_timers = {1: FakeTimer()}
-    adapter._expired_nav_generations = set()
+    adapter._expired_nav_request_ids = set()
     adapter._nav_generation = 1
-    adapter._nav_status = NavigationStatus(phase="sending", message="等待 Nav2 接收目标")
-    adapter._nav_goal_handle = None
+    adapter._nav_request_id = "server-session:1"
+    adapter._nav_status = NavigationStatus(
+        phase="sending", message="正在发送到工控机本地导航中继"
+    )
+    adapter._string = FakeString
+    adapter._nav_cancel_publisher = RecordingPublisher()
     return adapter
 
 
-def test_goal_response_transitions_to_navigation_without_http_wait() -> None:
-    adapter = adapter_with_pending_goal()
-    handle = FakeGoalHandle()
+def relay_status(request_id: str, phase: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        data=json.dumps(
+            {
+                "generation": 1,
+                "request_id": request_id,
+                "phase": phase,
+                "message": f"relay {phase}",
+                "x": 1.0,
+                "y": 2.0,
+                "yaw": 0.0,
+            }
+        )
+    )
 
-    adapter._goal_response(FakeGoalResponse(handle), 1)
+
+def test_relay_sending_status_keeps_confirmation_timer_until_nav2_accepts() -> None:
+    adapter = adapter_with_pending_goal()
+    timer = adapter._nav_goal_timers[1]
+
+    adapter._on_navigation_status(relay_status("server-session:1", "sending"))
+
+    assert adapter._nav_status.phase == "sending"
+    assert timer.cancelled is False
+    assert 1 in adapter._nav_goal_timers
+
+    adapter._on_navigation_status(relay_status("server-session:1", "navigating"))
 
     assert adapter._nav_status.phase == "navigating"
-    assert adapter._nav_goal_handle is handle
-    assert handle.result_future.callback is not None
+    assert timer.cancelled is True
+    assert adapter._nav_goal_timers == {}
 
 
-def test_late_goal_response_is_cancelled_after_confirmation_timeout() -> None:
+def test_delayed_status_from_an_old_web_process_is_ignored() -> None:
     adapter = adapter_with_pending_goal()
-    handle = FakeGoalHandle()
 
-    adapter._expire_navigation_goal_response(1)
-    adapter._goal_response(FakeGoalResponse(handle), 1)
+    adapter._on_navigation_status(relay_status("old-server-session:1", "navigating"))
+
+    assert adapter._nav_status.phase == "sending"
+    assert adapter._nav_goal_timers[1].cancelled is False
+
+
+def test_confirmation_timeout_publishes_a_correlated_cancel_tombstone() -> None:
+    adapter = adapter_with_pending_goal()
+
+    adapter._expire_navigation_goal_response(1, "server-session:1")
 
     assert adapter._nav_status.phase == "failed"
     assert "确认超时" in adapter._nav_status.message
-    assert handle.cancelled
-    assert adapter._nav_goal_handle is None
+    assert "server-session:1" in adapter._expired_nav_request_ids
+    assert len(adapter._nav_cancel_publisher.messages) == 1
+    assert json.loads(adapter._nav_cancel_publisher.messages[0]) == {
+        "generation": 1,
+        "request_id": "server-session:1",
+    }
