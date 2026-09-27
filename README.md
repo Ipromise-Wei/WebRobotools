@@ -115,7 +115,7 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 - 机械臂停止与夹爪 IO 释放的组合停止操作；
 - 末端相机画面入口，视频流地址沿用 `visualization.camera_stream_url`。
 
-`visualization.realsense.enabled` 默认启用。当前配置由工控机使用 FFmpeg 从 D435 彩色节点 `/dev/video4` 采集 `1280×720@30fps`，经过 SSH 视频管道传到 Web 后端，再由 `/api/visualization/camera/stream` 输出共享 MJPEG；机械臂页和底盘页复用同一视频源。该接口不生成模拟帧。若把 `source` 改为 `local`，则改用 Web 服务器本机的 `pyrealsense2` 采集。安装本机采集依赖后需要重新执行：
+`visualization.realsense.enabled` 默认启用。当前配置由工控机使用 FFmpeg 从 D435 彩色节点 `/dev/video4` 采集 `1280×720@15fps`，经过 SSH 视频管道传到 Web 后端，再由 `/api/visualization/camera/stream` 输出共享 MJPEG；机械臂页和底盘页复用同一视频源。该接口不生成模拟帧。若把 `source` 改为 `local`，则改用 Web 服务器本机的 `pyrealsense2` 采集。安装本机采集依赖后需要重新执行：
 
 ```bash
 ./scripts/setup_ros2_backend.sh
@@ -134,4 +134,4 @@ cd frontend && npm run build
 
 系统边界及接口约定见 [docs/architecture.md](docs/architecture.md) 和 [docs/api.md](docs/api.md)。
 
-每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.6.4 版本说明](docs/releases/v0.6.4.md)。
+每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.6.5 版本说明](docs/releases/v0.6.5.md)。

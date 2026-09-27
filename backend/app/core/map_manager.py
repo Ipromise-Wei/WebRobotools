@@ -40,7 +40,7 @@ class MapManager:
                     await asyncio.wait_for(
                         self._condition.wait_for(lambda: self._version != version), 15
                     )
-                except TimeoutError:
+                except asyncio.TimeoutError:
                     pass
             return self._version, self._snapshot
 
@@ -76,6 +76,6 @@ class MapManager:
                     await asyncio.wait_for(
                         self._condition.wait_for(lambda: self._version != version), 15
                     )
-                except TimeoutError:
+                except asyncio.TimeoutError:
                     pass
         return await self.transport_snapshot()

@@ -33,7 +33,6 @@ class StateManager:
                         self._condition.wait_for(lambda: self._version != known_version),
                         timeout=timeout,
                     )
-                except TimeoutError:
+                except asyncio.TimeoutError:
                     pass
             return self._version, deepcopy(self._state)
-

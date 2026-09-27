@@ -36,6 +36,12 @@ ros2:
   # retains the original-resolution map, so this does not weaken safety checks.
   web_map_max_cells: 262144
   plan_topic: /plan
+  # Nav2 的完整路径只在工控机内部执行；Web 叠加层最多每 0.5 秒刷新一次，
+  # 并保留 256 个均匀采样点，防止路径消息挤占导航心跳。
+  path_snapshot_interval_s: 0.5
+  web_path_max_points: 256
+  # 为导航心跳、TF/里程计定时器和地图/路径回调保留独立执行槽。
+  executor_threads: 3
   navigate_to_pose_action: /navigate_to_pose
   navigation_active_topic: /webrobot/navigation/active
   allow_motion_commands: true

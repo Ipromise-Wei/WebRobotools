@@ -38,6 +38,11 @@ class ROS2Settings(BaseModel):
     map_snapshot_interval_s: float = Field(default=2.0, ge=0.2, le=10.0)
     web_map_max_cells: int = Field(default=262_144, ge=32_768, le=1_048_576)
     plan_topic: str = "/plan"
+    # Nav2 can publish long global plans many times per second. These limits
+    # apply only to the browser overlay; Nav2 retains its complete path.
+    path_snapshot_interval_s: float = Field(default=0.5, ge=0.1, le=10.0)
+    web_path_max_points: int = Field(default=256, ge=2, le=4_096)
+    executor_threads: int = Field(default=3, ge=2, le=4)
     navigate_to_pose_action: str = "/navigate_to_pose"
     navigation_active_topic: str = "/webrobot/navigation/active"
     allow_motion_commands: bool = False

@@ -40,6 +40,7 @@ class ROS2NodeAdapter:
         self._last_map_pose = 0.0
         self._last_map = 0.0
         self._last_map_snapshot = 0.0
+        self._last_path_snapshot = 0.0
         self._last_command = 0.0
         self._last_watchdog = 0.0
         self._velocity = (0.0, 0.0)
@@ -100,7 +101,7 @@ class ROS2NodeAdapter:
         self._node.create_timer(0.05, self._publish_velocity)
         self._node.create_timer(0.1, self._publish_navigation_active)
         self._node.create_timer(0.1, self._update_map_pose)
-        self._executor = MultiThreadedExecutor(num_threads=2)
+        self._executor = MultiThreadedExecutor(num_threads=self.config.executor_threads)
         self._executor.add_node(self._node)
         self._running = True
         self._thread = threading.Thread(target=self._executor.spin, daemon=True)
@@ -281,17 +282,51 @@ class ROS2NodeAdapter:
             self._last_map_snapshot = now
 
     def _on_path(self, message: Any) -> None:
+        now = time.monotonic()
+        with self._lock:
+            if (
+                now - self._last_path_snapshot
+                < self.config.path_snapshot_interval_s
+            ):
+                return
+
+        poses = message.poses
+        point_count = len(poses)
+        maximum = self.config.web_path_max_points
+        if point_count <= maximum:
+            indices = range(point_count)
+        else:
+            # Uniform sampling is sufficient for a display-only polyline and
+            # preserves both the robot-side and goal-side endpoints. Avoid a
+            # full Path -> Pydantic conversion in the ROS callback.
+            step = (point_count - 1) / (maximum - 1)
+            indices = (round(index * step) for index in range(maximum))
+        path = [
+            Point2D.model_construct(
+                x=float(poses[index].pose.position.x),
+                y=float(poses[index].pose.position.y),
+            )
+            for index in indices
+        ]
         with self._lock:
             # Do not mutate a snapshot which might already be held by a map
             # WebSocket response. The grid data itself is immutable after a
             # snapshot is published, so this is intentionally a shallow copy.
+            # A second executor thread may have accepted a newer path while
+            # this callback was converting points outside the lock.
+            if (
+                now - self._last_path_snapshot
+                < self.config.path_snapshot_interval_s
+            ):
+                return
             self._map = self._map.model_copy(
                 update={
-                    "path": [Point2D(x=p.pose.position.x, y=p.pose.position.y) for p in message.poses],
+                    "path": path,
                     "path_revision": self._map.path_revision + 1,
                     "updated_at": datetime.now(timezone.utc),
                 }
             )
+            self._last_path_snapshot = now
 
     def clear_map_cache(self) -> MapSnapshot:
         """Drop only the Web adapter's latest map and path, not SLAM's map."""
