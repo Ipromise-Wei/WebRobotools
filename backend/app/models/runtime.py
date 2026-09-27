@@ -37,3 +37,17 @@ class RuntimeLog(BaseModel):
 class RuntimeActionResponse(BaseModel):
     success: bool
     status: RuntimeStatus
+
+
+class MapSaveRequest(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+class MapImportRequest(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    yaml_base64: str = Field(min_length=1, max_length=2_000_000)
+    pgm_base64: str = Field(min_length=1, max_length=32_000_000)
+
+
+class MapLibrary(BaseModel):
+    maps: list[str] = Field(default_factory=list)

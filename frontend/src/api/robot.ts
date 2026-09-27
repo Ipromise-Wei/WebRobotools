@@ -44,6 +44,7 @@ export type RuntimePhase = 'disabled' | 'unconfigured' | 'offline' | 'stopped' |
 export interface RuntimeTaskState { id: string; label: string; state: 'pending' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error'; pid: number | null; message: string; dependencies: string[] }
 export interface RuntimeStatus { agent_version: number; orchestrating: boolean; enabled: boolean; reachable: boolean; phase: RuntimePhase; host: string; message: string; supervisor_pid: number | null; tasks: RuntimeTaskState[]; updated_at: string; legacy_can0_active?: boolean }
 export interface RuntimeActionResponse { success: boolean; status: RuntimeStatus }
+export interface MapLibrary { maps: string[] }
 export interface NavigationStatus { phase: 'idle' | 'sending' | 'navigating' | 'canceling' | 'succeeded' | 'canceled' | 'failed'; message: string; x: number | null; y: number | null; yaw: number | null }
 
 export const robotApi = {
@@ -77,4 +78,10 @@ export const robotApi = {
   startRuntimeTask: (taskId: string) => api.post<RuntimeActionResponse>(`/runtime/tasks/${taskId}/start`, {}, { timeout: 25000 }).then((response) => response.data),
   stopRuntimeTask: (taskId: string) => api.post<RuntimeActionResponse>(`/runtime/tasks/${taskId}/stop`, {}, { timeout: 25000 }).then((response) => response.data),
   runtimeLogs: () => api.get<{ lines: string[] }>('/runtime/logs', { params: { lines: 160 }, timeout: 12000 }).then((response) => response.data),
+  startManualMapping: () => api.post<RuntimeActionResponse>('/runtime/mapping/manual/start', {}, { timeout: 30000 }).then((response) => response.data),
+  startAutomaticMapping: () => api.post<RuntimeActionResponse>('/runtime/mapping/automatic/start', {}, { timeout: 30000 }).then((response) => response.data),
+  stopMapping: () => api.post<RuntimeActionResponse>('/runtime/mapping/stop', {}, { timeout: 30000 }).then((response) => response.data),
+  maps: () => api.get<MapLibrary>('/runtime/maps', { timeout: 12000 }).then((response) => response.data),
+  saveMap: (name: string) => api.post<MapLibrary>('/runtime/maps/save', { name }, { timeout: 60000 }).then((response) => response.data),
+  importMap: (name: string, yaml_base64: string, pgm_base64: string) => api.post<MapLibrary>('/runtime/maps/import', { name, yaml_base64, pgm_base64 }, { timeout: 60000 }).then((response) => response.data),
 }

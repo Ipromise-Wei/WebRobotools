@@ -1,7 +1,9 @@
 import asyncio
 import base64
 import json
+import re
 import shlex
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,12 @@ class RemoteRuntimeManager:
             "-o", f"ConnectTimeout={int(self.settings.connect_timeout)}",
             port_flag, str(self.settings.port),
         ]
+
+    @staticmethod
+    def _map_name(name: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
+            raise RemoteRuntimeError("地图名称只能包含字母、数字、下划线和连字符，且最多 64 个字符")
+        return name
 
     async def _execute(self, command: str, timeout: float = 15) -> str:
         if not self.settings.enabled:
@@ -83,6 +91,27 @@ class RemoteRuntimeManager:
         paths = " ".join(shlex.quote(destination) for _, destination in sources)
         await self._execute(f"chmod 700 {paths}")
 
+    async def _copy_to_remote(self, source: Path, destination: str) -> None:
+        process = await asyncio.create_subprocess_exec(
+            "scp", *self._ssh_options("-P"), str(source), f"{self.target}:{destination}",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            raise RemoteRuntimeError("上传地图到工控机超时") from None
+        if process.returncode:
+            detail = stderr.decode(errors="replace").strip() or stdout.decode(errors="replace").strip()
+            raise RemoteRuntimeError(detail or "上传地图到工控机失败")
+
+    def _ros_command(self, command: str) -> str:
+        setup = [f"source {shlex.quote(path)}" for path in self.settings.environment_setup]
+        setup.append(f"export ROS_DOMAIN_ID={int(self.settings.domain_id)}")
+        setup.append(command)
+        return "bash -lc " + shlex.quote("set -e; " + "; ".join(setup))
+
     async def _deploy_agent(self) -> None:
         remote_dir = str(Path(self.settings.agent_path).parent)
         await self._deploy_sources([
@@ -116,6 +145,7 @@ class RemoteRuntimeManager:
             "domain_id": self.settings.domain_id,
             "environment_setup": self.settings.environment_setup,
             "tasks": [task.model_dump() for task in self.settings.tasks],
+            "profiles": [profile.model_dump() for profile in self.settings.profiles],
         }
         return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
 
@@ -235,6 +265,28 @@ class RemoteRuntimeManager:
             )
             return await self.status()
 
+    async def start_profile(self, profile_id: str) -> RuntimeStatus:
+        if profile_id not in {profile.id for profile in self.settings.profiles}:
+            raise RemoteRuntimeError(f"unknown runtime profile: {profile_id}")
+        async with self._lock:
+            current = await self.status()
+            if current.legacy_can0_active:
+                raise RemoteRuntimeError(current.message)
+            await self._deploy_agent()
+            # Manual driving and Frontier must not own navigation concurrently.
+            if profile_id == "manual_mapping":
+                frontier = next((task for task in current.tasks if task.id == "frontier_exploration"), None)
+                if frontier and frontier.state in {"starting", "running", "stopping"}:
+                    await self._execute(
+                        self._agent_command("stop-task", "--task-id", "frontier_exploration"),
+                        timeout=25,
+                    )
+            await self._execute(
+                self._agent_command("start-profile", "--profile", profile_id, "--manifest", self._manifest()),
+                timeout=25,
+            )
+            return await self.status()
+
     async def stop(self) -> RuntimeStatus:
         async with self._lock:
             current = await self.status()
@@ -246,3 +298,46 @@ class RemoteRuntimeManager:
     async def logs(self, lines: int = 120) -> list[str]:
         output = await self._execute(self._agent_command("logs", "--lines", str(lines)), timeout=10)
         return output.splitlines()
+
+    async def list_maps(self) -> list[str]:
+        directory = self.settings.map_directory
+        output = await self._execute(
+            f"mkdir -p {shlex.quote(directory)} && find {shlex.quote(directory)} -maxdepth 1 -type f -name '*.yaml' -printf '%f\\n' | sort",
+            timeout=12,
+        )
+        return [Path(item).stem for item in output.splitlines() if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.yaml", item)]
+
+    async def save_map(self, name: str) -> list[str]:
+        name = self._map_name(name)
+        async with self._lock:
+            current = await self.status()
+            slam = next((task for task in current.tasks if task.id == "slam"), None)
+            if not current.reachable or slam is None or slam.state != "running":
+                raise RemoteRuntimeError("请先启动手动建图或自动建图，并等待 SLAM 地图就绪")
+            directory = self.settings.map_directory
+            target = f"{directory}/{name}"
+            await self._execute(f"mkdir -p {shlex.quote(directory)}", timeout=12)
+            await self._execute(
+                self._ros_command(
+                    f"timeout 45 ros2 run nav2_map_server map_saver_cli -t /map -f {shlex.quote(target)} --fmt pgm"
+                ),
+                timeout=55,
+            )
+            return await self.list_maps()
+
+    async def import_map(self, name: str, yaml_content: bytes, image_content: bytes) -> list[str]:
+        name = self._map_name(name)
+        if not yaml_content or not image_content:
+            raise RemoteRuntimeError("地图 YAML 和 PGM 文件不能为空")
+        directory = self.settings.map_directory
+        async with self._lock:
+            await self._execute(f"mkdir -p {shlex.quote(directory)}", timeout=12)
+            with tempfile.TemporaryDirectory(prefix="webrobot-map-") as temporary:
+                root = Path(temporary)
+                local_yaml = root / f"{name}.yaml"
+                local_image = root / f"{name}.pgm"
+                local_yaml.write_bytes(yaml_content)
+                local_image.write_bytes(image_content)
+                await self._copy_to_remote(local_yaml, f"{directory}/{name}.yaml")
+                await self._copy_to_remote(local_image, f"{directory}/{name}.pgm")
+            return await self.list_maps()

@@ -93,10 +93,14 @@ remote_runtime:
   connect_timeout: 5
   agent_path: /home/hzauaiot/.local/lib/webrobot/runtime_agent.py
   domain_id: 30
+  # Saved and browser-imported maps are kept on the industrial PC, not in the
+  # Web server's temporary filesystem.
+  map_directory: /home/hzauaiot/.local/share/webrobot/maps
   environment_setup:
     - /opt/ros/humble/setup.bash
     - /home/hzauaiot/songwei/ChassisControl/install/setup.bash
     - /home/hzauaiot/songwei/Laser/install/setup.bash
+    - /home/hzauaiot/songwei/frontier_ws/install/setup.bash
   tasks:
     - id: chassis
       label: Ranger Mini V3 底盘
@@ -128,3 +132,20 @@ remote_runtime:
       command: /usr/bin/python3 /home/hzauaiot/.local/lib/webrobot/nav2_web_runtime.py --params-file /home/hzauaiot/songwei/Laser/config/nav2_params.yaml
       startup_delay: 5
       dependencies: [chassis, slam]
+    - id: frontier_exploration
+      label: Frontier 自动建图
+      command: ros2 launch frontier_exploration_ros2 frontier_explorer.launch.py params_file:=/home/hzauaiot/songwei/frontier_ws/config/frontier_robot.yaml autostart:=false control_service_enabled:=true map_qos_autodetect_on_startup:=true
+      startup_delay: 5
+      ready_command: ros2 service list | grep -qx /control_exploration
+      ready_timeout: 30
+      on_start_command: ros2 run frontier_exploration_ros2 frontier_exploration_ctl start -t 15
+      on_stop_command: ros2 run frontier_exploration_ros2 frontier_exploration_ctl stop -t 8 -q
+      include_in_start_all: false
+      dependencies: [navigation]
+  profiles:
+    - id: manual_mapping
+      label: 手动建图
+      tasks: [chassis, lidar, localization, laser_scan, slam, navigation]
+    - id: automatic_mapping
+      label: 自动建图
+      tasks: [chassis, lidar, localization, laser_scan, slam, navigation, frontier_exploration]

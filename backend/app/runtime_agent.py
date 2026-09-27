@@ -173,6 +173,24 @@ def shell_command(manifest: dict[str, Any], command: str) -> str:
     return "set -e; " + "; ".join(setup)
 
 
+def run_hook(manifest: dict[str, Any], command: str, timeout: float, label: str) -> None:
+    """Run a configured lifecycle hook; browser input never reaches this path."""
+    if not command:
+        return
+    result = subprocess.run(
+        ["bash", "-lc", shell_command(manifest, command)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.stdout:
+        print(f"[{now()}] [{label}] {result.stdout.strip()}", flush=True)
+    if result.returncode:
+        raise RuntimeError(f"{label} failed with exit code {result.returncode}")
+
+
 def terminate_group(pid: int | None, expected_start: int | None = None, force: bool = False) -> None:
     if not alive(pid, expected_start):
         return
@@ -236,6 +254,10 @@ def supervise_task(manifest: dict[str, Any], task_id: str) -> int:
                 time.sleep(1)
 
         if not stop_requested:
+            run_hook(
+                manifest, str(config.get("on_start_command", "")), 25,
+                f"{config['label']} start hook",
+            )
             update_task(task_id, state="running", message="运行中")
             print(f"[{now()}] [{config['label']}] running", flush=True)
         while process.poll() is None and not stop_requested:
@@ -246,6 +268,14 @@ def supervise_task(manifest: dict[str, Any], task_id: str) -> int:
         failed_message = str(exc)
     finally:
         if process is not None:
+            if alive(process.pid, process_started):
+                try:
+                    run_hook(
+                        manifest, str(config.get("on_stop_command", "")), 15,
+                        f"{config['label']} stop hook",
+                    )
+                except (RuntimeError, subprocess.TimeoutExpired) as exc:
+                    print(f"[{now()}] [{config['label']}] stop hook warning: {exc}", flush=True)
             terminate_group(process.pid, process_started)
             try:
                 process.wait(timeout=8)
@@ -273,6 +303,14 @@ def decode_manifest(encoded: str) -> dict[str, Any]:
     for task in manifest["tasks"]:
         if not all(isinstance(task.get(key), str) and task[key] for key in ("id", "label", "command")):
             raise ValueError("任务定义无效")
+    task_ids = {task["id"] for task in manifest["tasks"]}
+    for profile in manifest.get("profiles", []):
+        if not isinstance(profile.get("id"), str) or not profile["id"]:
+            raise ValueError("运行方案定义无效")
+        if not isinstance(profile.get("tasks"), list) or not profile["tasks"]:
+            raise ValueError("运行方案任务为空")
+        if any(task_id not in task_ids for task_id in profile["tasks"]):
+            raise ValueError("运行方案包含未知任务")
     return manifest
 
 
@@ -311,7 +349,7 @@ def start_task(task_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def orchestrate_start(manifest: dict[str, Any]) -> int:
+def orchestrate_start(manifest: dict[str, Any], task_ids: list[str]) -> int:
     cancelled = False
 
     def request_stop(_signum: int, _frame: Any) -> None:
@@ -324,7 +362,7 @@ def orchestrate_start(manifest: dict[str, Any]) -> int:
         orchestrator_pid=os.getpid(),
         orchestrator_start=process_start(os.getpid()),
     )
-    pending = [task["id"] for task in manifest.get("tasks", [])]
+    pending = list(task_ids)
     try:
         print(f"[{now()}] [all] dependency-ordered startup requested", flush=True)
         while pending and not cancelled:
@@ -392,11 +430,34 @@ def start_all(manifest: dict[str, Any]) -> dict[str, Any]:
     state = normalise_state(manifest)
     if alive(state.get("orchestrator_pid"), state.get("orchestrator_start")):
         return state
-    if state.get("tasks") and all(task.get("state") == "running" for task in state["tasks"]):
+    task_ids = [task["id"] for task in manifest.get("tasks", []) if task.get("include_in_start_all", True)]
+    if not task_ids:
+        raise ValueError("没有配置默认启动任务")
+    if all(
+        next((item.get("state") for item in state.get("tasks", []) if item.get("id") == task_id), "stopped") == "running"
+        for task_id in task_ids
+    ):
+        return state
+    return start_profile(manifest, "__default__", task_ids)
+
+
+def start_profile(manifest: dict[str, Any], profile_id: str, task_ids: list[str] | None = None) -> dict[str, Any]:
+    if task_ids is None:
+        profile = next((item for item in manifest.get("profiles", []) if item.get("id") == profile_id), None)
+        if profile is None:
+            raise ValueError(f"未知运行方案：{profile_id}")
+        task_ids = list(profile["tasks"])
+    save_manifest(manifest)
+    state = normalise_state(manifest)
+    if alive(state.get("orchestrator_pid"), state.get("orchestrator_start")):
         return state
     log = LOG_FILE.open("a", encoding="utf-8")
     orchestrator = subprocess.Popen(
-        [sys.executable, str(Path(__file__).resolve()), "orchestrate", "--manifest-file", str(MANIFEST_FILE)],
+        [
+            sys.executable, str(Path(__file__).resolve()), "orchestrate",
+            "--manifest-file", str(MANIFEST_FILE), "--task-ids",
+            ",".join(task_ids),
+        ],
         start_new_session=True, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
     )
     log.close()
@@ -472,8 +533,12 @@ def main() -> int:
     supervisor.add_argument("--manifest-file", required=True)
     start_all_parser = commands.add_parser("start-all")
     start_all_parser.add_argument("--manifest", required=True)
+    start_profile_parser = commands.add_parser("start-profile")
+    start_profile_parser.add_argument("--profile", required=True)
+    start_profile_parser.add_argument("--manifest", required=True)
     orchestrator = commands.add_parser("orchestrate")
     orchestrator.add_argument("--manifest-file", required=True)
+    orchestrator.add_argument("--task-ids", required=True)
     commands.add_parser("stop")
     commands.add_parser("status")
     log_parser = commands.add_parser("logs")
@@ -485,7 +550,7 @@ def main() -> int:
         return supervise_task(manifest, args.task_id)
     if args.action == "orchestrate":
         manifest = read_json(Path(args.manifest_file), {})
-        return orchestrate_start(manifest)
+        return orchestrate_start(manifest, [item for item in args.task_ids.split(",") if item])
     if args.action == "logs":
         try:
             lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -499,6 +564,8 @@ def main() -> int:
         result = stop_all()
     elif args.action == "start-all":
         result = start_all(decode_manifest(args.manifest))
+    elif args.action == "start-profile":
+        result = start_profile(decode_manifest(args.manifest), args.profile)
     elif args.action == "stop-task":
         result = stop_task(args.task_id)
     else:

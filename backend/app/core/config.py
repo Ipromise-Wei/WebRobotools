@@ -151,7 +151,16 @@ class RuntimeTaskSettings(BaseModel):
     startup_delay: float = Field(default=2.0, ge=0, le=120)
     ready_command: str = ""
     ready_timeout: float = Field(default=0, ge=0, le=300)
+    on_start_command: str = ""
+    on_stop_command: str = ""
+    include_in_start_all: bool = True
     dependencies: list[str] = Field(default_factory=list)
+
+
+class RuntimeProfileSettings(BaseModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    label: str = Field(min_length=1, max_length=80)
+    tasks: list[str] = Field(min_length=1)
 
 
 class RemoteRuntimeSettings(BaseModel):
@@ -162,8 +171,10 @@ class RemoteRuntimeSettings(BaseModel):
     connect_timeout: float = Field(default=5.0, ge=1, le=30)
     agent_path: str = "/home/hzauaiot/.local/lib/webrobot/runtime_agent.py"
     domain_id: int = Field(default=30, ge=0, le=232)
+    map_directory: str = "/home/hzauaiot/.local/share/webrobot/maps"
     environment_setup: list[str] = Field(default_factory=list)
     tasks: list[RuntimeTaskSettings] = Field(default_factory=list)
+    profiles: list[RuntimeProfileSettings] = Field(default_factory=list)
 
 
 class Settings(BaseModel):
