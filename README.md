@@ -13,6 +13,8 @@
 - `/ws/robot` 实时状态推送
 - Dashboard、底盘、机械臂工作站、夹爪和系统状态页面
 - 移动底盘页内嵌 `/map`、Nav2 路径、机器人位姿和摄像头窗口
+- 手动建图、Frontier 自动建图、停止建图与地图文件库管理
+- 当前 `/map` 的 ROS YAML + PGM 保存，以及 YAML + PGM 地图文件手动导入
 - RViz 风格地图交互：缩放、平移、跟随机器人、全屏和图层开关
 - ROS2 Humble 局域网只读状态接入（默认 `ROS_DOMAIN_ID=30`）
 - RML63 六轴状态、关节运动、TCP 直线运动、停止与工具 IO 夹爪控制
@@ -49,7 +51,7 @@ python3 scripts/set_admin_password.py
 
 局域网 HTTP 部署保持 `cookie_secure: false`。如果后续通过 HTTPS 反向代理对外提供服务，应改为 `cookie_secure: true`。
 
-## 工控机导航可视化
+## 工控机导航与建图
 
 底盘、雷达、定位、建图和 Nav2 由移动底盘页面的模块面板按依赖顺序启动。原有 `/home/hzauaiot/songwei/start_mapping.sh` 不应与 Web 模块面板同时运行，否则可能出现重复节点和直接写入 `/cmd_vel` 的速度发布者。Web 服务器加入同一 ROS2 Domain 后，订阅：
 
@@ -74,6 +76,25 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 ```
 
 当前开发版本支持从移动底盘页面管理工控机运行模块。后端会通过 SSH 自动部署轻量运行代理，底盘、雷达、FAST-LIO、点云转激光、SLAM Toolbox 和 Nav2 均有独立开关、进程状态和日志；既可逐项手动开启，也可用“一键全启”按依赖顺序后台启动，并使用“全部停止”中止启动流程或统一回收，不再依赖人工执行 `start_mapping.sh`。
+
+### 手动与自动建图
+
+底盘页面的“建图管理”卡提供两种受管方案：
+
+- **手动建图**：按依赖顺序启动底盘、雷达、FAST-LIO、点云转激光、SLAM Toolbox 和 Nav2；操作者使用页面中的虚拟摇杆或键盘驾驶机器人完成建图。
+- **自动建图**：在上述模块就绪后启动 `frontier_exploration_ros2`，并通过其控制服务显式开始 Frontier 探索。切换回手动建图或点击“停止建图”时，系统先请求 Frontier 停止，再回收本次建图的进程。
+
+自动建图需要工控机已构建 `/home/hzauaiot/songwei/frontier_ws`，并具备 `frontier_exploration_ros2` 和 `nav2_map_server`。开始自动探索前，必须清空作业区域、确认现场物理急停有效，并全程安排现场人员监控。Web 停止、Frontier 停止和速度看门狗均不替代硬件急停。
+
+### 保存与导入地图
+
+“保存当前地图”调用工控机 `nav2_map_server map_saver_cli`，将正在发布的 `/map` 保存为标准 ROS 地图 YAML 与 PGM 文件。导入时须同时选择同一张地图的 `.yaml` 与 `.pgm` 文件；Web 会校验基本格式后保存到工控机：
+
+```text
+/home/hzauaiot/.local/share/webrobot/maps
+```
+
+导入地图仅加入地图文件库，不会中断 SLAM，也不会自动切换到静态地图定位；使用已保存地图进行 AMCL/定位导航属于单独的运行模式。
 
 这些模块开关常驻移动底盘页面右侧控制栏。运动区可在虚拟摇杆和键盘模式之间切换：摇杆按住拖动可同时控制线速度和角速度；键盘模式可按住方向键或 `W/A/S/D` 持续驾驶，并可组合前进与转弯。松键、松开摇杆、页面失焦或触控中断即停车；控制区的空格键可请求停止运动或取消导航，但不能替代现场硬件急停。地图窗口支持鼠标拖拽、滚轮缩放、双击跟随机器人、视图复位、全屏显示、图层显隐以及地图坐标查看。
 
@@ -113,4 +134,4 @@ cd frontend && npm run build
 
 系统边界及接口约定见 [docs/architecture.md](docs/architecture.md) 和 [docs/api.md](docs/api.md)。
 
-版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+版本变化见 [CHANGELOG.md](CHANGELOG.md)，v0.6.0 的完整建图说明见 [v0.6.0 版本说明](docs/releases/v0.6.0.md)。
