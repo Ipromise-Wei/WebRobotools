@@ -33,11 +33,11 @@
 | GET | `/api/visualization/camera/status` | RealSense 连接、序列号、帧序号及错误状态 |
 | GET | `/api/visualization/camera/stream` | 后端共享的 RealSense 真机 MJPEG 彩色流 |
 | GET | `/api/runtime/status` | 工控机连通性和各运行任务状态 |
-| POST | `/api/runtime/start` | 按依赖顺序在后台启动全部受管任务 |
+| POST | `/api/runtime/start` | 按依赖顺序启动基础功能、通信中继与 Nav2，不启动 SLAM/Frontier |
 | POST | `/api/runtime/stop` | 停止全部受管任务及其子进程 |
-| POST | `/api/runtime/mapping/manual/start` | 重启建图会话并从空白地图启动手动建图 |
-| POST | `/api/runtime/mapping/automatic/start` | 重启建图会话并从空白地图启动 Frontier 自动建图 |
-| POST | `/api/runtime/mapping/stop` | 只停止 Frontier、Nav2、地图中继与 SLAM，保留底盘和传感器管线 |
+| POST | `/api/runtime/mapping/manual/start` | 在默认运行基线上启动 SLAM；若 Frontier 正在运行则只停止 Frontier |
+| POST | `/api/runtime/mapping/automatic/start` | 在默认基线上按需启动 SLAM 和 Frontier，已有手动地图时只增加 Frontier |
+| POST | `/api/runtime/mapping/stop` | 只停止 Frontier 和 SLAM 并清空 Web 地图，保留基础功能、通信中继与 Nav2 |
 | POST | `/api/runtime/tasks/{task_id}/start` | 独立启动指定模块 |
 | POST | `/api/runtime/tasks/{task_id}/stop` | 独立停止指定模块 |
 | POST | `/api/runtime/tasks/{task_id}/restart` | 独立重启指定模块 |

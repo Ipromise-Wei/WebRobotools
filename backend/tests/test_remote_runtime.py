@@ -37,10 +37,6 @@ async def _run_timeout_scenario() -> None:
             "app.core.remote_runtime.asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=process),
         ),
-        patch(
-            "app.core.remote_runtime.asyncio.wait_for",
-            new=AsyncMock(side_effect=asyncio.TimeoutError),
-        ),
         pytest.raises(RemoteRuntimeError, match="industrial PC command timed out"),
     ):
         await manager._execute("status", timeout=0.01)
@@ -181,5 +177,79 @@ def test_mapping_profile_restart_stops_only_session_before_starting_fresh() -> N
         assert "slam,telemetry_relay,navigation,frontier_exploration" in commands[selective_stop_index][0]
         assert commands[selective_stop_index][1] == 60
         assert selective_stop_index < start_index
+
+    asyncio.run(scenario())
+
+
+def test_manual_mapping_only_removes_frontier_and_keeps_baseline() -> None:
+    async def scenario() -> None:
+        base_ids = [
+            "chassis", "lidar", "localization", "laser_scan",
+            "telemetry_relay", "navigation",
+        ]
+        tasks = [
+            RuntimeTaskSettings(id=task_id, label=task_id, command="sleep 30")
+            for task_id in [*base_ids, "slam"]
+        ]
+        tasks.append(RuntimeTaskSettings(
+            id="frontier_exploration",
+            label="Frontier",
+            command="frontier",
+            on_stop_command="ros2 run frontier_exploration_ros2 frontier_exploration_ctl stop",
+        ))
+        settings = RemoteRuntimeSettings(
+            enabled=True,
+            host="robot.example",
+            user="robot",
+            tasks=tasks,
+            profiles=[
+                RuntimeProfileSettings(id="manual_mapping", label="Manual", tasks=["slam"]),
+                RuntimeProfileSettings(
+                    id="automatic_mapping",
+                    label="Automatic",
+                    tasks=["slam", "frontier_exploration"],
+                ),
+            ],
+        )
+        manager = RemoteRuntimeManager(settings)
+        current = RuntimeStatus(
+            enabled=True,
+            reachable=True,
+            phase="running",
+            tasks=[
+                *[
+                    RuntimeTaskState(id=task_id, label=task_id, state="running")
+                    for task_id in base_ids
+                ],
+                RuntimeTaskState(id="slam", label="SLAM", state="running"),
+                RuntimeTaskState(
+                    id="frontier_exploration", label="Frontier", state="running",
+                ),
+            ],
+        )
+        commands: list[str] = []
+
+        async def fake_status() -> RuntimeStatus:
+            return current
+
+        async def fake_execute(command: str, timeout: float = 15) -> str:
+            commands.append(command)
+            return ""
+
+        manager.status = fake_status  # type: ignore[method-assign]
+        manager._deploy_agent = AsyncMock()  # type: ignore[method-assign]
+        manager._execute = fake_execute  # type: ignore[method-assign]
+
+        assert await manager.start_mapping_profile("manual_mapping") is current
+        assert any("frontier_exploration_ctl stop" in command for command in commands)
+        assert any(
+            "stop-tasks" in command and "frontier_exploration" in command
+            for command in commands
+        )
+        assert any("start-profile" in command and "manual_mapping" in command for command in commands)
+        assert not any(
+            "stop-tasks" in command and "navigation" in command
+            for command in commands
+        )
 
     asyncio.run(scenario())

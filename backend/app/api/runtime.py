@@ -117,12 +117,10 @@ async def start_basic_modules(
 
 @router.post("/mapping/manual/start", response_model=RuntimeActionResponse)
 async def start_manual_mapping(
-    request: Request,
     runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
 ) -> RuntimeActionResponse:
     try:
-        result = await runtime.restart_profile("manual_mapping")
-        await clear_live_map_cache(request)
+        result = await runtime.start_mapping_profile("manual_mapping")
     except RemoteRuntimeError as exc:
         raise failure(exc) from exc
     return RuntimeActionResponse(success=True, status=result)
@@ -130,12 +128,10 @@ async def start_manual_mapping(
 
 @router.post("/mapping/automatic/start", response_model=RuntimeActionResponse)
 async def start_automatic_mapping(
-    request: Request,
     runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
 ) -> RuntimeActionResponse:
     try:
-        result = await runtime.restart_profile("automatic_mapping")
-        await clear_live_map_cache(request)
+        result = await runtime.start_mapping_profile("automatic_mapping")
     except RemoteRuntimeError as exc:
         raise failure(exc) from exc
     return RuntimeActionResponse(success=True, status=result)

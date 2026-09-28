@@ -19,6 +19,7 @@ class RuntimeTaskState(BaseModel):
 class RuntimeStatus(BaseModel):
     agent_version: int = 0
     orchestrating: bool = False
+    orchestrating_profile: str = ""
     enabled: bool = False
     reachable: bool = False
     legacy_can0_active: bool = False

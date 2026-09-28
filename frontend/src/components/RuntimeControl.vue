@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { robotApi, type RuntimePhase, type RuntimeStatus, type RuntimeTaskState } from '@/api/robot'
 
 const emptyStatus: RuntimeStatus = {
-  agent_version: 0, orchestrating: false, enabled: true, reachable: false, phase: 'offline', host: '', message: '正在连接工控机',
+  agent_version: 0, orchestrating: false, orchestrating_profile: '', enabled: true, reachable: false, phase: 'offline', host: '', message: '正在连接工控机',
   supervisor_pid: null, tasks: [], updated_at: new Date().toISOString(),
 }
 const status = ref<RuntimeStatus>(emptyStatus)
@@ -25,8 +25,8 @@ const phaseText: Record<RuntimePhase, string> = {
 const hasActiveTasks = computed(() => status.value.tasks.some((task) => ['starting', 'running', 'stopping', 'error'].includes(task.state)))
 const legacyCanListed = computed(() => status.value.tasks.some((task) => task.id === 'can0'))
 const migrationRequired = computed(() => !!status.value.legacy_can0_active || legacyCanListed.value)
-const basicModuleIds = new Set(['chassis', 'lidar', 'localization', 'laser_scan', 'slam', 'telemetry_relay'])
-const standardStackIds = new Set([...basicModuleIds, 'navigation'])
+const basicModuleIds = new Set(['chassis', 'lidar', 'localization', 'laser_scan', 'telemetry_relay', 'navigation'])
+const standardStackIds = basicModuleIds
 const baseTasks = computed(() => status.value.tasks.filter((task) => basicModuleIds.has(task.id)))
 const basicModulesActive = computed(() => baseTasks.value.some((task) => ['starting', 'running', 'stopping', 'error'].includes(task.state)))
 const basicModulesReady = computed(() => baseTasks.value.length === basicModuleIds.size && baseTasks.value.every((task) => task.state === 'running'))
@@ -34,7 +34,10 @@ const standardStackRunning = computed(() => {
   const tasks = status.value.tasks.filter((task) => standardStackIds.has(task.id))
   return tasks.length === standardStackIds.size && tasks.every((task) => task.state === 'running')
 })
-const visibleTasks = computed(() => status.value.tasks.filter((task) => task.id !== 'can0' && !basicModuleIds.has(task.id)))
+const mappingTaskIds = new Set(['slam', 'frontier_exploration'])
+const visibleTasks = computed(() => status.value.tasks.filter((task) =>
+  task.id !== 'can0' && !basicModuleIds.has(task.id) && !mappingTaskIds.has(task.id),
+))
 const controlsBusy = computed(() => !!busyTask.value || basicModulesBusy.value || startingAll.value || stoppingAll.value || status.value.orchestrating || migrationRequired.value)
 const stopControlsBusy = computed(() => !!busyTask.value || basicModulesBusy.value || stoppingAll.value || migrationRequired.value)
 const taskNames = computed(() => Object.fromEntries(status.value.tasks.map((task) => [task.id, task.label])))
@@ -100,8 +103,8 @@ async function toggleBasicModules() {
   const stopping = basicModulesActive.value
   if (stopping ? stopControlsBusy.value : controlsBusy.value) return
   const confirmText = stopping
-    ? '关闭基础功能模块会同步停止工控机上的全部 Web 管理 ROS2 进程，包含 SLAM 地图、Nav2 导航和 Frontier 自动建图。确定继续吗？'
-    : '启动基础功能模块？系统将按依赖顺序启动底盘、雷达、FAST-LIO、点云转激光、SLAM 与实时通信中继。请确认现场安全。'
+    ? '关闭基础功能与 Nav2 会同步停止工控机上的全部 Web 管理 ROS2 进程，包含当前 SLAM 与 Frontier。确定继续吗？'
+    : '启动基础功能与 Nav2？系统将按依赖顺序启动底盘、雷达、FAST-LIO、点云转激光、通信中继和 Nav2，不启动 SLAM。请确认现场安全。'
   if (!window.confirm(confirmText)) return
   basicModulesBusy.value = true
   error.value = ''
@@ -161,20 +164,20 @@ onBeforeUnmount(() => timer && clearInterval(timer))
     <p v-if="error" class="runtime-error">{{ error }}</p>
     <div class="runtime-basic-module">
       <div>
-        <strong>基础功能模块</strong>
-        <small>底盘、雷达、FAST-LIO、点云转激光、SLAM、实时通信中继</small>
+        <strong>基础功能 + Nav2</strong>
+        <small>底盘、雷达、FAST-LIO、点云转激光、通信中继、Nav2（默认自启）</small>
       </div>
       <button
         class="module-switch basic-module-switch"
         :class="{ on: basicModulesActive, failed: baseTasks.some((task) => task.state === 'error') }"
         :disabled="(basicModulesActive ? stopControlsBusy : controlsBusy) || !status.enabled || status.phase === 'offline'"
-        :aria-label="`${basicModulesActive ? '关闭' : '启动'}基础功能模块`"
-        :title="basicModulesReady ? '基础功能模块运行中' : basicModulesActive ? '基础功能模块正在启动、停止或异常' : '一键启动六个基础模块'"
+        :aria-label="`${basicModulesActive ? '关闭' : '启动'}基础功能与 Nav2`"
+        :title="basicModulesReady ? '基础功能与 Nav2 运行中' : basicModulesActive ? '基础功能与 Nav2 正在启动、停止或异常' : '一键启动基础功能与 Nav2'"
         @click="toggleBasicModules"
       ><i></i></button>
     </div>
-    <p class="runtime-basic-note">关闭基础功能模块会同步停止工控机上的全部 Web 管理进程，包括 SLAM 地图、Nav2 与 Frontier。</p>
-    <div class="runtime-switches">
+    <p class="runtime-basic-note">程序启动后自动初始化，默认不运行 SLAM；关闭此模块才会停止全部 Web 管理进程。</p>
+    <div v-if="visibleTasks.length" class="runtime-switches">
       <div v-for="task in visibleTasks" :key="task.id" class="runtime-switch-row">
         <i :class="task.state"></i>
         <span><strong>{{ task.label }}</strong><small>{{ dependencyText(task) }} · {{ task.message }}</small></span>
@@ -187,7 +190,6 @@ onBeforeUnmount(() => timer && clearInterval(timer))
           @click="toggleTask(task)"
         ><i></i></button>
       </div>
-      <p v-if="!visibleTasks.length && !migrationRequired">读取模块清单中……</p>
     </div>
 
     <footer>

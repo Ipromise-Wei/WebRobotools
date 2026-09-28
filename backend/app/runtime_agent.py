@@ -26,7 +26,7 @@ MANIFEST_FILE = STATE_DIR / "manifest.json"
 LOG_FILE = STATE_DIR / "runtime.log"
 LOCK_FILE = STATE_DIR / "runtime.lock"
 ACTIVE_STATES = {"starting", "running", "stopping"}
-AGENT_VERSION = 3
+AGENT_VERSION = 4
 
 
 def now() -> str:
@@ -107,6 +107,8 @@ def ensure_tasks(state: dict[str, Any], manifest: dict[str, Any]) -> None:
 def derive_summary(state: dict[str, Any]) -> None:
     state["agent_version"] = AGENT_VERSION
     state["orchestrating"] = bool(state.get("orchestrator_pid"))
+    if not state["orchestrating"]:
+        state["orchestrating_profile"] = ""
     states = [task.get("state", "stopped") for task in state.get("tasks", [])]
     if state["orchestrating"]:
         state.update(phase="starting", message="正在按依赖顺序启动全部模块")
@@ -132,7 +134,11 @@ def normalise_state(manifest: dict[str, Any] | None = None) -> dict[str, Any]:
         if state.get("orchestrator_pid") and not alive(
             state.get("orchestrator_pid"), state.get("orchestrator_start")
         ):
-            state.update(orchestrator_pid=None, orchestrator_start=None)
+            state.update(
+                orchestrator_pid=None,
+                orchestrator_start=None,
+                orchestrating_profile="",
+            )
         for task in state.get("tasks", []):
             if task.get("state") in ACTIVE_STATES and not alive(task.get("supervisor_pid"), task.get("supervisor_start")):
                 if alive(task.get("pid"), task.get("pid_start")):
@@ -349,7 +355,9 @@ def start_task(task_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def orchestrate_start(manifest: dict[str, Any], task_ids: list[str]) -> int:
+def orchestrate_start(
+    manifest: dict[str, Any], task_ids: list[str], profile_id: str
+) -> int:
     cancelled = False
 
     def request_stop(_signum: int, _frame: Any) -> None:
@@ -361,6 +369,7 @@ def orchestrate_start(manifest: dict[str, Any], task_ids: list[str]) -> int:
     update_runtime(
         orchestrator_pid=os.getpid(),
         orchestrator_start=process_start(os.getpid()),
+        orchestrating_profile=profile_id,
     )
     pending = list(task_ids)
     try:
@@ -422,7 +431,11 @@ def orchestrate_start(manifest: dict[str, Any], task_ids: list[str]) -> int:
         print(f"[{now()}] [all] startup failed: {exc}", flush=True)
         return 1
     finally:
-        update_runtime(orchestrator_pid=None, orchestrator_start=None)
+        update_runtime(
+            orchestrator_pid=None,
+            orchestrator_start=None,
+            orchestrating_profile="",
+        )
 
 
 def start_all(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -456,7 +469,7 @@ def start_profile(manifest: dict[str, Any], profile_id: str, task_ids: list[str]
         [
             sys.executable, str(Path(__file__).resolve()), "orchestrate",
             "--manifest-file", str(MANIFEST_FILE), "--task-ids",
-            ",".join(task_ids),
+            ",".join(task_ids), "--profile-id", profile_id,
         ],
         start_new_session=True, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
     )
@@ -464,6 +477,7 @@ def start_profile(manifest: dict[str, Any], profile_id: str, task_ids: list[str]
     return update_runtime(
         orchestrator_pid=orchestrator.pid,
         orchestrator_start=process_start(orchestrator.pid),
+        orchestrating_profile=profile_id,
     )
 
 
@@ -512,13 +526,25 @@ def cancel_orchestrator() -> dict[str, Any]:
             time.sleep(0.1)
         if alive(orchestrator, orchestrator_start):
             os.kill(orchestrator, signal.SIGKILL)
-        update_runtime(orchestrator_pid=None, orchestrator_start=None)
+        update_runtime(
+            orchestrator_pid=None,
+            orchestrator_start=None,
+            orchestrating_profile="",
+        )
         state = normalise_state()
     return state
 
 
-def stop_tasks(task_ids: list[str]) -> dict[str, Any]:
+def stop_tasks(
+    task_ids: list[str], manifest: dict[str, Any] | None = None
+) -> dict[str, Any]:
     state = cancel_orchestrator()
+    if manifest is not None:
+        # A first deployment has no runtime.json yet. Seed the allow-listed
+        # graph before selective cleanup so startup is idempotent on both a
+        # clean industrial PC and an in-place upgrade.
+        save_manifest(manifest)
+        state = normalise_state(manifest)
     configured_ids = {task["id"] for task in state.get("tasks", [])}
     unknown = [task_id for task_id in task_ids if task_id not in configured_ids]
     if unknown:
@@ -550,6 +576,7 @@ def main() -> int:
     stop_parser.add_argument("--task-id", required=True)
     stop_tasks_parser = commands.add_parser("stop-tasks")
     stop_tasks_parser.add_argument("--task-ids", required=True)
+    stop_tasks_parser.add_argument("--manifest")
     supervisor = commands.add_parser("supervise-task")
     supervisor.add_argument("--task-id", required=True)
     supervisor.add_argument("--manifest-file", required=True)
@@ -561,6 +588,7 @@ def main() -> int:
     orchestrator = commands.add_parser("orchestrate")
     orchestrator.add_argument("--manifest-file", required=True)
     orchestrator.add_argument("--task-ids", required=True)
+    orchestrator.add_argument("--profile-id", required=True)
     commands.add_parser("stop")
     commands.add_parser("status")
     log_parser = commands.add_parser("logs")
@@ -572,7 +600,11 @@ def main() -> int:
         return supervise_task(manifest, args.task_id)
     if args.action == "orchestrate":
         manifest = read_json(Path(args.manifest_file), {})
-        return orchestrate_start(manifest, [item for item in args.task_ids.split(",") if item])
+        return orchestrate_start(
+            manifest,
+            [item for item in args.task_ids.split(",") if item],
+            args.profile_id,
+        )
     if args.action == "logs":
         try:
             lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -591,7 +623,10 @@ def main() -> int:
     elif args.action == "stop-task":
         result = stop_task(args.task_id)
     elif args.action == "stop-tasks":
-        result = stop_tasks([item for item in args.task_ids.split(",") if item])
+        result = stop_tasks(
+            [item for item in args.task_ids.split(",") if item],
+            decode_manifest(args.manifest) if args.manifest else None,
+        )
     else:
         manifest = decode_manifest(args.manifest)
         if args.action == "restart-task":

@@ -22,8 +22,13 @@ class RemoteRuntimeError(RuntimeError):
 class RemoteRuntimeManager:
     """Controls one allow-listed robot runtime over an SSH transport."""
 
-    mapping_session_task_ids = (
+    startup_reset_task_ids = (
         "slam", "telemetry_relay", "navigation", "frontier_exploration",
+    )
+    mapping_task_ids = ("slam", "frontier_exploration")
+    base_navigation_task_ids = (
+        "chassis", "lidar", "localization", "laser_scan",
+        "telemetry_relay", "navigation",
     )
 
     def __init__(self, settings: RemoteRuntimeSettings) -> None:
@@ -65,6 +70,10 @@ class RemoteRuntimeManager:
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
@@ -89,6 +98,10 @@ class RemoteRuntimeManager:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(), timeout=15
                 )
+            except asyncio.CancelledError:
+                process.kill()
+                await process.wait()
+                raise
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
@@ -108,6 +121,10 @@ class RemoteRuntimeManager:
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
@@ -324,13 +341,12 @@ class RemoteRuntimeManager:
             return await self.status()
 
     async def restart_profile(self, profile_id: str) -> RuntimeStatus:
-        """Start a mapping profile with a fresh in-memory SLAM session.
+        """Reset the old mapping transport and start a clean runtime profile.
 
         Humble deployments cannot consistently reset a running SLAM Toolbox
-        map through a service. Reaping the mapping session first prevents
-        manual and Frontier sessions from sharing publishers, navigation
-        goals, or the previous process' map state while preserving the base
-        chassis, LiDAR, FAST-LIO and point-cloud pipeline.
+        map through a service. Reaping SLAM, its relay, Nav2 and Frontier also
+        prevents a previous transient map or navigation goal from leaking into
+        the default no-mapping startup profile.
         """
         if profile_id not in {profile.id for profile in self.settings.profiles}:
             raise RemoteRuntimeError(f"unknown runtime profile: {profile_id}")
@@ -343,7 +359,8 @@ class RemoteRuntimeManager:
             await self._execute(
                 self._agent_command(
                     "stop-tasks", "--task-ids",
-                    ",".join(self.mapping_session_task_ids),
+                    ",".join(self.startup_reset_task_ids),
+                    "--manifest", self._manifest(),
                 ),
                 timeout=60,
             )
@@ -356,8 +373,51 @@ class RemoteRuntimeManager:
             )
             return await self.status()
 
+    async def start_mapping_profile(self, profile_id: str) -> RuntimeStatus:
+        """Enable manual SLAM or add Frontier to the live SLAM session."""
+        if profile_id not in {"manual_mapping", "automatic_mapping"}:
+            raise RemoteRuntimeError(f"unsupported mapping profile: {profile_id}")
+        if profile_id not in {profile.id for profile in self.settings.profiles}:
+            raise RemoteRuntimeError(f"unknown runtime profile: {profile_id}")
+        async with self._lock:
+            current = await self.status()
+            if current.legacy_can0_active:
+                raise RemoteRuntimeError(current.message)
+            if current.orchestrating:
+                raise RemoteRuntimeError("基础功能与 Nav2 正在初始化，请稍候")
+            task_states = {task.id: task.state for task in current.tasks}
+            missing = [
+                task_id for task_id in self.base_navigation_task_ids
+                if task_states.get(task_id) != "running"
+            ]
+            if missing:
+                raise RemoteRuntimeError("基础功能与 Nav2 尚未就绪，请等待默认初始化完成")
+            await self._deploy_agent()
+            if profile_id == "manual_mapping":
+                frontier = next(
+                    (task for task in current.tasks if task.id == "frontier_exploration"),
+                    None,
+                )
+                if frontier and frontier.state in {"starting", "running", "stopping"}:
+                    await self._request_frontier_stop(current)
+                    await self._execute(
+                        self._agent_command(
+                            "stop-tasks", "--task-ids", "frontier_exploration",
+                            "--manifest", self._manifest(),
+                        ),
+                        timeout=35,
+                    )
+            await self._execute(
+                self._agent_command(
+                    "start-profile", "--profile", profile_id,
+                    "--manifest", self._manifest(),
+                ),
+                timeout=25,
+            )
+            return await self.status()
+
     async def stop_mapping(self) -> RuntimeStatus:
-        """Stop only the live mapping/navigation session and keep base I/O."""
+        """Disable SLAM/Frontier while keeping the default runtime online."""
         async with self._lock:
             current = await self.status()
             if current.legacy_can0_active:
@@ -367,7 +427,8 @@ class RemoteRuntimeManager:
             await self._execute(
                 self._agent_command(
                     "stop-tasks", "--task-ids",
-                    ",".join(self.mapping_session_task_ids),
+                    ",".join(self.mapping_task_ids),
+                    "--manifest", self._manifest(),
                 ),
                 timeout=60,
             )

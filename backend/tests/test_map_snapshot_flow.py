@@ -2,7 +2,7 @@ import asyncio
 import base64
 import threading
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 import zlib
 
 from app.adapters.ros2.node import ROS2NodeAdapter
@@ -137,11 +137,17 @@ def test_map_transport_encodes_signed_cells_as_compressed_bytes() -> None:
 
 def test_idle_websocket_waits_emit_heartbeats_instead_of_raising() -> None:
     async def scenario() -> None:
+        async def force_timeout(awaitable, timeout=None):
+            # asyncio.wait_for normally consumes/closes the coroutine. Mirror
+            # that ownership in this deterministic timeout test.
+            awaitable.close()
+            raise asyncio.TimeoutError
+
         manager = MapManager()
         version, _ = await manager.transport_snapshot()
         with patch(
             "app.core.map_manager.asyncio.wait_for",
-            new=AsyncMock(side_effect=asyncio.TimeoutError),
+            new=force_timeout,
         ):
             next_version, _ = await manager.wait_for_transport_update(version)
         assert next_version == version
@@ -149,7 +155,7 @@ def test_idle_websocket_waits_emit_heartbeats_instead_of_raising() -> None:
         state = StateManager()
         with patch(
             "app.core.state_manager.asyncio.wait_for",
-            new=AsyncMock(side_effect=asyncio.TimeoutError),
+            new=force_timeout,
         ):
             state_version, _ = await state.wait_for_update(0)
         assert state_version == 0

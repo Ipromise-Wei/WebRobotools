@@ -40,6 +40,44 @@ async def deploy_arm_bridge(remote_runtime: RemoteRuntimeManager) -> None:
         )
 
 
+async def clear_runtime_map(adapter: ROS2NodeAdapter, manager: MapManager) -> None:
+    """Clear both adapter and Web snapshots without touching saved map files."""
+    await manager.replace(adapter.clear_map_cache())
+
+
+async def initialize_default_runtime(
+    remote_runtime: RemoteRuntimeManager,
+    profile_id: str,
+    adapter: ROS2NodeAdapter,
+    map_manager: MapManager,
+    visualization_service: VisualizationService,
+) -> None:
+    """Bring up the no-mapping baseline before exposing ROS map updates."""
+    logger = logging.getLogger(__name__)
+    while True:
+        try:
+            await remote_runtime.restart_profile(profile_id)
+            break
+        except asyncio.CancelledError:
+            raise
+        except (OSError, RemoteRuntimeError) as exc:
+            # Do not enable map polling after a failed cleanup: an unmanaged
+            # relay on the industrial PC could otherwise republish a stale
+            # OccupancyGrid into the freshly opened page. Keep the Web map
+            # empty and retry the complete baseline transition instead.
+            logger.warning(
+                "Unable to initialize default robot runtime; retrying in 10 seconds: %s",
+                exc,
+            )
+            await clear_runtime_map(adapter, map_manager)
+            await asyncio.sleep(10)
+    # The old relay or SLAM publisher may have emitted one final frame while
+    # the remote transition was in progress. Clear it before map polling is
+    # enabled, so a new browser session can never load that historical frame.
+    await clear_runtime_map(adapter, map_manager)
+    await visualization_service.start()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -58,6 +96,7 @@ async def lifespan(app: FastAPI):
     adapter: ROS2NodeAdapter | None = None
     realman_client: RealManClient | None = None
     arm_bridge_deploy_task = None
+    runtime_startup_task: asyncio.Task[None] | None = None
     if settings.robot.mode == "ros2":
         adapter = ROS2NodeAdapter(settings.ros2)
         adapter.start()
@@ -92,11 +131,35 @@ async def lifespan(app: FastAPI):
     app.state.remote_runtime = remote_runtime
     app.state.ros2_adapter = adapter
     await robot_manager.initialize()
-    await visualization_service.start()
+    if (
+        adapter is not None
+        and settings.remote_runtime.enabled
+        and settings.remote_runtime.startup_profile
+    ):
+        # Keep MapManager empty until the industrial PC has discarded any old
+        # SLAM/relay session and the default no-mapping runtime is starting.
+        await clear_runtime_map(adapter, map_manager)
+        runtime_startup_task = asyncio.create_task(
+            initialize_default_runtime(
+                remote_runtime,
+                settings.remote_runtime.startup_profile,
+                adapter,
+                map_manager,
+                visualization_service,
+            )
+        )
+    else:
+        await visualization_service.start()
     await realsense_stream.start()
     try:
         yield
     finally:
+        if runtime_startup_task and not runtime_startup_task.done():
+            runtime_startup_task.cancel()
+            try:
+                await runtime_startup_task
+            except asyncio.CancelledError:
+                pass
         if arm_bridge_deploy_task:
             await arm_bridge_deploy_task
         await realsense_stream.stop()
@@ -111,7 +174,7 @@ async def lifespan(app: FastAPI):
 settings = get_settings()
 app = FastAPI(
     title=settings.server.app_name,
-    version="0.7.3",
+    version="0.8.0",
     lifespan=lifespan,
 )
 app.add_middleware(

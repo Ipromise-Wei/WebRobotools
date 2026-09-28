@@ -43,7 +43,7 @@ export interface ArmConfig {
 }
 export type RuntimePhase = 'disabled' | 'unconfigured' | 'offline' | 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
 export interface RuntimeTaskState { id: string; label: string; state: 'pending' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error'; pid: number | null; message: string; dependencies: string[] }
-export interface RuntimeStatus { agent_version: number; orchestrating: boolean; enabled: boolean; reachable: boolean; phase: RuntimePhase; host: string; message: string; supervisor_pid: number | null; tasks: RuntimeTaskState[]; updated_at: string; legacy_can0_active?: boolean }
+export interface RuntimeStatus { agent_version: number; orchestrating: boolean; orchestrating_profile: string; enabled: boolean; reachable: boolean; phase: RuntimePhase; host: string; message: string; supervisor_pid: number | null; tasks: RuntimeTaskState[]; updated_at: string; legacy_can0_active?: boolean }
 export interface RuntimeActionResponse { success: boolean; status: RuntimeStatus }
 export interface MapLibrary { maps: string[] }
 export interface NavigationStatus { phase: 'idle' | 'sending' | 'navigating' | 'canceling' | 'succeeded' | 'canceled' | 'failed'; message: string; x: number | null; y: number | null; yaw: number | null }

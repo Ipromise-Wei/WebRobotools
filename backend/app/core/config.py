@@ -200,9 +200,28 @@ class RemoteRuntimeSettings(BaseModel):
     agent_path: str = "/home/hzauaiot/.local/lib/webrobot/runtime_agent.py"
     domain_id: int = Field(default=30, ge=0, le=232)
     map_directory: str = "/home/hzauaiot/.local/share/webrobot/maps"
+    startup_profile: str = Field(
+        default="", pattern=r"^$|^[a-z][a-z0-9_-]{0,63}$"
+    )
     environment_setup: list[str] = Field(default_factory=list)
     tasks: list[RuntimeTaskSettings] = Field(default_factory=list)
     profiles: list[RuntimeProfileSettings] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_runtime_graph(self) -> "RemoteRuntimeSettings":
+        task_ids = {task.id for task in self.tasks}
+        profile_ids = {profile.id for profile in self.profiles}
+        if self.startup_profile and self.startup_profile not in profile_ids:
+            raise ValueError("remote_runtime.startup_profile 必须引用已配置的运行方案")
+        for task in self.tasks:
+            unknown = set(task.dependencies) - task_ids
+            if unknown:
+                raise ValueError(f"运行任务 {task.id} 包含未知依赖：{', '.join(sorted(unknown))}")
+        for profile in self.profiles:
+            unknown = set(profile.tasks) - task_ids
+            if unknown:
+                raise ValueError(f"运行方案 {profile.id} 包含未知任务：{', '.join(sorted(unknown))}")
+        return self
 
 
 class Settings(BaseModel):

@@ -121,3 +121,60 @@ def test_runtime_agent_stops_only_requested_mapping_tasks() -> None:
             assert tasks["slam"]["state"] == "stopped"
         finally:
             call_agent(state_dir, "stop")
+
+
+def test_selective_stop_seeds_state_on_first_deployment() -> None:
+    manifest = {
+        "domain_id": 30,
+        "environment_setup": [],
+        "tasks": [{
+            "id": "slam", "label": "SLAM", "command": "sleep 30",
+            "startup_delay": 0.1, "ready_command": "", "ready_timeout": 0,
+        }],
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(manifest).encode()).decode()
+    with tempfile.TemporaryDirectory() as state_dir:
+        stopped = call_agent(
+            state_dir,
+            "stop-tasks",
+            "--task-ids",
+            "slam",
+            "--manifest",
+            encoded,
+        )
+        assert stopped["phase"] == "stopped"
+        assert stopped["tasks"][0]["id"] == "slam"  # type: ignore[index]
+        assert stopped["tasks"][0]["state"] == "stopped"  # type: ignore[index]
+
+
+def test_runtime_agent_reports_the_profile_being_orchestrated() -> None:
+    manifest = {
+        "domain_id": 30,
+        "environment_setup": [],
+        "tasks": [{
+            "id": "slam", "label": "SLAM", "command": "sleep 30",
+            "startup_delay": 0.1, "ready_command": "", "ready_timeout": 0,
+        }],
+        "profiles": [{
+            "id": "manual_mapping", "label": "Manual", "tasks": ["slam"],
+        }],
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(manifest).encode()).decode()
+    with tempfile.TemporaryDirectory() as state_dir:
+        started = call_agent(
+            state_dir, "start-profile", "--profile", "manual_mapping",
+            "--manifest", encoded,
+        )
+        try:
+            assert started["orchestrating"] is True
+            assert started["orchestrating_profile"] == "manual_mapping"
+            deadline = time.monotonic() + 3
+            status = started
+            while status["orchestrating"] and time.monotonic() < deadline:
+                time.sleep(0.1)
+                status = call_agent(state_dir, "status")
+            assert status["orchestrating"] is False
+            assert status["orchestrating_profile"] == ""
+            assert status["tasks"][0]["state"] == "running"  # type: ignore[index]
+        finally:
+            call_agent(state_dir, "stop")
