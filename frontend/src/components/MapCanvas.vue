@@ -19,7 +19,10 @@ const goalMode = ref(false)
 const goalDraft = ref<{ x: number; y: number; yaw: number } | null>(null)
 const operationBusy = ref(false)
 const operationError = ref('')
+const mapFileInput = ref<HTMLInputElement | null>(null)
+const mapFileMessage = ref('')
 const navigationActive = computed(() => ['sending', 'navigating', 'canceling'].includes(navigation.value.phase))
+const navigationCanBeCanceled = computed(() => ['sending', 'navigating'].includes(navigation.value.phase))
 const navigationPhaseLabel = computed(() => ({
   idle: '待命', sending: '发送中', navigating: '导航中', canceling: '取消中',
   succeeded: '已到达', canceled: '已取消', failed: '异常',
@@ -32,6 +35,15 @@ const navigationHint = computed(() => operationError.value || (goalMode.value
 let resizeObserver: ResizeObserver | undefined
 let mapTexture: HTMLCanvasElement | undefined
 let textureRevision = -1
+let drawFrame: number | undefined
+
+function scheduleDraw() {
+  if (drawFrame !== undefined) return
+  drawFrame = window.requestAnimationFrame(() => {
+    drawFrame = undefined
+    draw()
+  })
+}
 
 function geometry() {
   const element = canvas.value
@@ -185,19 +197,19 @@ function resetView() {
   pan.x = 0
   pan.y = 0
   followRobot.value = false
-  draw()
+  scheduleDraw()
 }
 
 function centerRobot() {
   followRobot.value = true
-  draw()
+  scheduleDraw()
 }
 
 function toggleGoalMode() {
   goalMode.value = !goalMode.value
   goalDraft.value = null
   if (goalMode.value) followRobot.value = false
-  draw()
+  scheduleDraw()
 }
 
 function wheel(event: WheelEvent) {
@@ -213,7 +225,7 @@ function wheel(event: WheelEvent) {
   const next = geometry()!
   pan.x += mouseX - (next.left + mapX * next.scale)
   pan.y += mouseY - (next.top + mapY * next.scale)
-  draw()
+  scheduleDraw()
 }
 
 function pointerDown(event: PointerEvent) {
@@ -230,7 +242,7 @@ function pointerDown(event: PointerEvent) {
     goalDraft.value = { ...point, yaw: props.yaw }
     pointer.dragging = true
     canvas.value?.setPointerCapture(event.pointerId)
-    draw()
+    scheduleDraw()
     return
   }
   followRobot.value = false
@@ -245,7 +257,7 @@ function pointerMove(event: PointerEvent) {
     const point = worldAt(event)
     if (point && Math.hypot(point.x - goalDraft.value.x, point.y - goalDraft.value.y) > .03) {
       goalDraft.value.yaw = Math.atan2(point.y - goalDraft.value.y, point.x - goalDraft.value.x)
-      draw()
+      scheduleDraw()
     }
     return
   }
@@ -254,7 +266,7 @@ function pointerMove(event: PointerEvent) {
     pan.y += event.clientY - pointer.y
     pointer.x = event.clientX
     pointer.y = event.clientY
-    draw()
+    scheduleDraw()
   }
   const view = geometry()
   const rect = canvas.value?.getBoundingClientRect()
@@ -272,7 +284,7 @@ function pointerUp(event: PointerEvent) {
   pointer.dragging = false
   if (canvas.value?.hasPointerCapture(event.pointerId)) canvas.value.releasePointerCapture(event.pointerId)
   if (draft && event.type !== 'pointercancel') void confirmGoal(draft)
-  else if (goalMode.value) { goalDraft.value = null; draw() }
+  else if (goalMode.value) { goalDraft.value = null; scheduleDraw() }
 }
 
 function errorText(reason: unknown) {
@@ -281,7 +293,7 @@ function errorText(reason: unknown) {
 
 async function confirmGoal(goal: { x: number; y: number; yaw: number }) {
   goalDraft.value = null
-  draw()
+  scheduleDraw()
   if (!window.confirm(`发送 Nav2 目标？\n坐标 (${goal.x.toFixed(2)}, ${goal.y.toFixed(2)}) m\n朝向 ${(goal.yaw * 180 / Math.PI).toFixed(0)}°\n\n请确认路径周围无人且机器人可安全行驶。`)) return
   operationBusy.value = true
   operationError.value = ''
@@ -293,7 +305,7 @@ async function confirmGoal(goal: { x: number; y: number; yaw: number }) {
     try { navigation.value = await robotApi.navigationStatus() }
     catch { /* Keep the last server status if it is temporarily unavailable. */ }
   }
-  finally { operationBusy.value = false; draw() }
+  finally { operationBusy.value = false; scheduleDraw() }
 }
 
 async function cancelGoal() {
@@ -301,7 +313,7 @@ async function cancelGoal() {
   operationError.value = ''
   try { navigation.value = await robotApi.cancelNavigation() }
   catch (reason) { operationError.value = errorText(reason) }
-  finally { operationBusy.value = false; draw() }
+  finally { operationBusy.value = false; scheduleDraw() }
 }
 
 async function clearCache() {
@@ -313,12 +325,64 @@ async function clearCache() {
     mapTexture = undefined
     textureRevision = -1
   } catch (reason) { operationError.value = errorText(reason) }
-  finally { operationBusy.value = false }
+  finally { operationBusy.value = false; scheduleDraw() }
+}
+
+async function fileAsBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function saveMap() {
+  const suggestedName = `map_${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`
+  const name = window.prompt('请输入地图名称（字母、数字、下划线或连字符）：', suggestedName)?.trim()
+  if (!name || operationBusy.value) return
+  operationBusy.value = true
+  operationError.value = ''
+  mapFileMessage.value = ''
+  try {
+    const library = await robotApi.saveMap(name)
+    mapFileMessage.value = `地图“${name}”已保存（共 ${library.maps.length} 张）`
+  } catch (reason) {
+    operationError.value = errorText(reason)
+  } finally { operationBusy.value = false }
+}
+
+function chooseMapFiles() {
+  if (!operationBusy.value) mapFileInput.value?.click()
+}
+
+async function importMapFiles(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  input.value = ''
+  const yaml = files.find((file) => /\.ya?ml$/i.test(file.name))
+  const pgm = files.find((file) => /\.pgm$/i.test(file.name))
+  if (!yaml || !pgm) {
+    operationError.value = '请在同一次选择中同时选取同一张地图的 YAML 和 PGM 文件。'
+    return
+  }
+  const name = window.prompt('导入后的地图名称：', yaml.name.replace(/\.ya?ml$/i, ''))?.trim()
+  if (!name || operationBusy.value) return
+  operationBusy.value = true
+  operationError.value = ''
+  mapFileMessage.value = ''
+  try {
+    const library = await robotApi.importMap(name, await fileAsBase64(yaml), await fileAsBase64(pgm))
+    mapFileMessage.value = `地图“${name}”已导入（共 ${library.maps.length} 张）`
+  } catch (reason) {
+    operationError.value = errorText(reason)
+  } finally { operationBusy.value = false }
 }
 
 function toggleLayer(layer: keyof typeof layers) {
   layers[layer] = !layers[layer]
-  draw()
+  scheduleDraw()
 }
 
 function fullscreen() {
@@ -326,14 +390,17 @@ function fullscreen() {
   else void root.value?.requestFullscreen()
 }
 
-watch(() => [props.map.revision, props.map.path_revision, props.x, props.y, props.yaw], () => nextTick(draw))
-watch(navigation, () => nextTick(draw), { deep: true })
+watch(() => [props.map.revision, props.map.path_revision, props.x, props.y, props.yaw], () => nextTick(scheduleDraw))
+watch(navigation, () => nextTick(scheduleDraw), { deep: true })
 onMounted(() => {
-  resizeObserver = new ResizeObserver(draw)
+  resizeObserver = new ResizeObserver(scheduleDraw)
   if (root.value) resizeObserver.observe(root.value)
-  draw()
+  scheduleDraw()
 })
-onBeforeUnmount(() => resizeObserver?.disconnect())
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  if (drawFrame !== undefined) window.cancelAnimationFrame(drawFrame)
+})
 </script>
 
 <template>
@@ -342,11 +409,15 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
       <div><h2>SLAM 地图与路径</h2><span>{{ map.frame_id }} · {{ map.width }}×{{ map.height }}</span></div>
       <div class="map-tools" aria-label="地图视图工具">
         <button class="map-text-tool" :disabled="operationBusy || !map.data.length" title="只清除 Web 内存缓存，不删除 SLAM 地图" @click="clearCache">清地图缓存</button>
+        <button class="map-text-tool" :disabled="operationBusy || !map.data.length" title="将当前 SLAM 地图保存到工控机" @click="saveMap">保存当前地图</button>
+        <button class="map-text-tool" :disabled="operationBusy" title="导入工控机地图；请选择同一张地图的 YAML 与 PGM 文件" @click="chooseMapFiles">导入地图</button>
+        <input ref="mapFileInput" class="map-file-input" type="file" accept=".yaml,.yml,.pgm" multiple @change="importMapFiles">
         <button :class="{ active: followRobot }" title="跟随机器人" @click="centerRobot">◎</button>
         <button title="复位视图" @click="resetView">↺</button>
         <button title="全屏" @click="fullscreen">⛶</button>
       </div>
     </div>
+    <output v-if="mapFileMessage" class="map-file-message">{{ mapFileMessage }}</output>
     <div class="map-viewport">
       <canvas
         ref="canvas"
@@ -381,7 +452,7 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
           >{{ goalMode ? '退出选点' : '设置目标' }}</button>
           <button
             class="cancel"
-            :disabled="operationBusy || navigation.phase !== 'navigating'"
+            :disabled="operationBusy || !navigationCanBeCanceled"
             @click="cancelGoal"
           >{{ navigation.phase === 'canceling' ? '取消中…' : '取消导航' }}</button>
         </div>

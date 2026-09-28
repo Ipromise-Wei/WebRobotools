@@ -75,6 +75,7 @@ export const robotApi = {
   cancelNavigation: () => api.post<NavigationStatus>('/visualization/navigation/cancel', {}, { timeout: 6000 }).then((response) => response.data),
   runtimeStatus: () => api.get<RuntimeStatus>('/runtime/status', { timeout: 10000 }).then((response) => response.data),
   startRuntime: () => api.post<RuntimeActionResponse>('/runtime/start', {}, { timeout: 25000 }).then((response) => response.data),
+  startBasicRuntime: () => api.post<RuntimeActionResponse>('/runtime/basic/start', {}, { timeout: 25000 }).then((response) => response.data),
   stopRuntime: () => api.post<RuntimeActionResponse>('/runtime/stop', {}, { timeout: 70000 }).then((response) => response.data),
   startRuntimeTask: (taskId: string) => api.post<RuntimeActionResponse>(`/runtime/tasks/${taskId}/start`, {}, { timeout: 25000 }).then((response) => response.data),
   stopRuntimeTask: (taskId: string) => api.post<RuntimeActionResponse>(`/runtime/tasks/${taskId}/stop`, {}, { timeout: 25000 }).then((response) => response.data),

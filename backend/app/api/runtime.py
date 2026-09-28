@@ -94,6 +94,18 @@ async def start(
     return RuntimeActionResponse(success=True, status=result)
 
 
+@router.post("/basic/start", response_model=RuntimeActionResponse)
+async def start_basic_modules(
+    runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
+) -> RuntimeActionResponse:
+    """Start only the six shared ROS2 base modules, in dependency order."""
+    try:
+        result = await runtime.start_profile("basic_modules")
+    except RemoteRuntimeError as exc:
+        raise failure(exc) from exc
+    return RuntimeActionResponse(success=True, status=result)
+
+
 @router.post("/mapping/manual/start", response_model=RuntimeActionResponse)
 async def start_manual_mapping(
     runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],

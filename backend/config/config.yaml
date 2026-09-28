@@ -173,6 +173,9 @@ remote_runtime:
       include_in_start_all: false
       dependencies: [navigation]
   profiles:
+    - id: basic_modules
+      label: 基础功能模块
+      tasks: [chassis, lidar, localization, laser_scan, slam, telemetry_relay]
     - id: manual_mapping
       label: 手动建图
       tasks: [chassis, lidar, localization, laser_scan, slam, telemetry_relay, navigation]

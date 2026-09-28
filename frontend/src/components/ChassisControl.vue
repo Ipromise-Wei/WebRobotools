@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { robotApi } from '@/api/robot'
 import { useRobotStore } from '@/stores/robot'
 import { useVisualizationStore } from '@/stores/visualization'
 
@@ -17,6 +18,7 @@ const sensitivity = ref(0.8)
 const knob = reactive({ x: 0, y: 0 })
 const command = reactive({ linear: 0, angular: 0 })
 const pressedKeys = reactive(new Set<string>())
+const emergencyStopping = ref(false)
 let streamTimer: number | undefined
 
 const knobStyle = computed(() => ({ transform: `translate(${knob.x}px, ${knob.y}px)` }))
@@ -157,9 +159,23 @@ function keyUp(event: KeyboardEvent) {
   else updateKeyboard()
 }
 
-function emergencyStop() {
+async function emergencyStop() {
+  if (emergencyStopping.value) return
+  emergencyStopping.value = true
   stopDrive(false)
+  // A zero velocity command alone cannot cancel a Nav2 action. Send it
+  // immediately, cancel the Nav2 goal, then send a final zero command so an
+  // in-flight controller update cannot resume the chassis after the stop.
   void store.stopChassisStream()
+  try {
+    if (navigationActive.value) visual.navigation = await robotApi.cancelNavigation()
+  } catch {
+    // The final chassis stop below must still be sent if the navigation service is
+    // unavailable or the goal already completed.
+  } finally {
+    await store.stopChassisStream()
+    emergencyStopping.value = false
+  }
 }
 
 function visibilityChanged() {
@@ -234,7 +250,7 @@ onBeforeUnmount(() => {
       <label>线速度上限 <output>{{ linearMax.toFixed(1) }} m/s</output><input v-model.number="linearMax" type="range" min="0.1" max="1" step="0.1" /></label>
       <label>角速度上限 <output>{{ angularMax.toFixed(1) }} rad/s</output><input v-model.number="angularMax" type="range" min="0.1" max="2" step="0.1" /></label>
       <div class="sensitivity"><span>灵敏度</span><button v-for="value in [.25,.5,.8,1]" :key="value" :class="{ active: sensitivity === value }" @click="sensitivity = value">{{ value * 100 }}%</button></div>
-      <button class="emergency-stop" @click="emergencyStop"><b>■</b> {{ navigationActive ? '停止导航' : '停止运动' }} <small>{{ navigationActive ? 'NAV2' : 'SPACE' }}</small></button>
+      <button class="emergency-stop" :disabled="emergencyStopping" @click="emergencyStop"><b>■</b> {{ emergencyStopping ? '停止中…' : navigationActive ? '停止导航' : '停止运动' }} <small>{{ navigationActive ? 'NAV2' : 'SPACE' }}</small></button>
       <p>{{ controlMode === 'keyboard' ? '点击控制区后使用 ↑ ↓ ← →，亦支持 W/A/S/D' : '拖动距离决定速度，斜向拖动可边走边转' }}</p>
     </div>
   </section>
