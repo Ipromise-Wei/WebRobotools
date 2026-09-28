@@ -319,6 +319,32 @@ class RemoteRuntimeManager:
             )
             return await self.status()
 
+    async def restart_profile(self, profile_id: str) -> RuntimeStatus:
+        """Start a mapping profile with a fresh in-memory SLAM session.
+
+        Humble deployments cannot consistently reset a running SLAM Toolbox
+        map through a service.  Reaping the complete Web-managed stack first
+        also prevents manual and Frontier sessions from sharing publishers,
+        navigation goals, or the previous process' map state.
+        """
+        if profile_id not in {profile.id for profile in self.settings.profiles}:
+            raise RemoteRuntimeError(f"unknown runtime profile: {profile_id}")
+        async with self._lock:
+            current = await self.status()
+            if current.legacy_can0_active:
+                raise RemoteRuntimeError(current.message)
+            await self._request_frontier_stop(current)
+            await self._deploy_agent()
+            await self._execute(self._agent_command("stop"), timeout=60)
+            await self._execute(
+                self._agent_command(
+                    "start-profile", "--profile", profile_id,
+                    "--manifest", self._manifest(),
+                ),
+                timeout=25,
+            )
+            return await self.status()
+
     async def stop(self) -> RuntimeStatus:
         async with self._lock:
             current = await self.status()

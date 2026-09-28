@@ -45,14 +45,14 @@ async function run(action: () => Promise<unknown>, confirmText: string, allowDur
 function startManual() {
   void run(
     () => robotApi.startManualMapping(),
-    '启动手动建图？系统将依次启动底盘、雷达、FAST-LIO、SLAM 与 Nav2。请确认现场安全。',
+    '新建空白手动地图？系统将先停止当前受管进程并清除未保存的实时地图，再重新启动手动建图。已保存的 YAML/PGM 地图不会被删除。',
   )
 }
 
 function startAutomatic() {
   void run(
     () => robotApi.startAutomaticMapping(),
-    '启动自动建图？机器人将由 Frontier 自动探索未知区域。请清空作业区域并确保物理急停可用。',
+    '新建空白自动地图？系统将先停止当前受管进程并清除未保存的实时地图，再由 Frontier 重新探索。已保存的 YAML/PGM 地图不会被删除。请确保物理急停可用。',
   )
 }
 
@@ -73,6 +73,7 @@ onMounted(() => void refresh())
     <p class="mapping-state">
       {{ automaticRunning ? '自动建图运行中' : mappingRunning ? '手动建图运行中' : '建图未启动' }}
     </p>
+    <p class="mapping-hint">选择任一建图模式都会重启 SLAM 并从空白地图开始；保存到工控机的地图文件不受影响。</p>
     <p v-if="error" class="mapping-error" role="alert">{{ error }}</p>
     <div class="mapping-actions">
       <button :disabled="busy || runtimeOrchestrating" :class="{ active: mappingRunning && !automaticRunning }" @click="startManual">手动建图</button>
@@ -86,6 +87,7 @@ onMounted(() => void refresh())
 .mapping-control { padding: 12px; border: 1px solid #1d3b50; border-radius: 9px; background: #0a1825; }
 header { display: flex; align-items: baseline; gap: 8px; } h3 { margin: 0; font-size: 13px; } .eyebrow { font-size: 8px; letter-spacing: .1em; color: #38cbb5; }
 .mapping-state { margin: 8px 0; font-size: 11px; color: #d8edf3; }
+.mapping-hint { margin: 0 0 8px; color: #87a8b6; font-size: 9px; line-height: 1.45; }
 .mapping-error { margin: 8px 0; color: #ff8f8f; font-size: 11px; }.mapping-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 button { border: 1px solid #2a536a; border-radius: 5px; padding: 5px 8px; color: #dceef4; background: #10283a; font-size: 11px; cursor: pointer; } button:hover:not(:disabled), button.active { border-color: #35cdb7; color: #58e7d0; } button:disabled { opacity: .45; cursor: not-allowed; } button.danger { border-color: #77414a; color: #ffadb5; }
 </style>

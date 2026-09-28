@@ -3,7 +3,7 @@ import binascii
 import math
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import yaml
 
 from app.core.dependencies import get_remote_runtime
@@ -19,6 +19,15 @@ from app.models.runtime import (
 
 
 router = APIRouter()
+
+
+async def clear_live_map_cache(request: Request) -> None:
+    """Discard the Web copy after a remote SLAM session is stopped/replaced."""
+    adapter = request.app.state.ros2_adapter
+    if adapter is None:
+        return
+    snapshot = adapter.clear_map_cache()
+    await request.app.state.map_manager.replace(snapshot)
 
 
 def failure(exc: RemoteRuntimeError) -> HTTPException:
@@ -108,10 +117,12 @@ async def start_basic_modules(
 
 @router.post("/mapping/manual/start", response_model=RuntimeActionResponse)
 async def start_manual_mapping(
+    request: Request,
     runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
 ) -> RuntimeActionResponse:
     try:
-        result = await runtime.start_profile("manual_mapping")
+        result = await runtime.restart_profile("manual_mapping")
+        await clear_live_map_cache(request)
     except RemoteRuntimeError as exc:
         raise failure(exc) from exc
     return RuntimeActionResponse(success=True, status=result)
@@ -119,10 +130,12 @@ async def start_manual_mapping(
 
 @router.post("/mapping/automatic/start", response_model=RuntimeActionResponse)
 async def start_automatic_mapping(
+    request: Request,
     runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
 ) -> RuntimeActionResponse:
     try:
-        result = await runtime.start_profile("automatic_mapping")
+        result = await runtime.restart_profile("automatic_mapping")
+        await clear_live_map_cache(request)
     except RemoteRuntimeError as exc:
         raise failure(exc) from exc
     return RuntimeActionResponse(success=True, status=result)
@@ -130,10 +143,12 @@ async def start_automatic_mapping(
 
 @router.post("/mapping/stop", response_model=RuntimeActionResponse)
 async def stop_mapping(
+    request: Request,
     runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
 ) -> RuntimeActionResponse:
     try:
         result = await runtime.stop()
+        await clear_live_map_cache(request)
     except RemoteRuntimeError as exc:
         raise failure(exc) from exc
     return RuntimeActionResponse(success=True, status=result)
@@ -174,10 +189,12 @@ async def import_map(
 
 @router.post("/stop", response_model=RuntimeActionResponse)
 async def stop(
+    request: Request,
     runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
 ) -> RuntimeActionResponse:
     try:
         result = await runtime.stop()
+        await clear_live_map_cache(request)
     except RemoteRuntimeError as exc:
         raise failure(exc) from exc
     return RuntimeActionResponse(success=True, status=result)
@@ -186,10 +203,13 @@ async def stop(
 @router.post("/tasks/{task_id}/stop", response_model=RuntimeActionResponse)
 async def stop_task(
     task_id: str,
+    request: Request,
     runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
 ) -> RuntimeActionResponse:
     try:
         result = await runtime.task_action(task_id, "stop")
+        if task_id == "slam":
+            await clear_live_map_cache(request)
     except RemoteRuntimeError as exc:
         raise failure(exc) from exc
     return RuntimeActionResponse(success=True, status=result)

@@ -317,7 +317,7 @@ async function cancelGoal() {
 }
 
 async function clearCache() {
-  if (!window.confirm('清除 Web 端地图与路径缓存？\n这不会删除工控机上的 SLAM 地图，也不会停止建图。')) return
+  if (!window.confirm('清除 Web 端的地图与路径显示缓存？\n这不会重置正在运行的 SLAM；如果 SLAM 继续发布，地图会再次显示。如需空白地图，请选择手动或自动建图重启会话。')) return
   operationBusy.value = true
   operationError.value = ''
   try {
@@ -408,7 +408,7 @@ onBeforeUnmount(() => {
     <div class="section-title map-title">
       <div><h2>SLAM 地图与路径</h2><span>{{ map.frame_id }} · {{ map.width }}×{{ map.height }}</span></div>
       <div class="map-tools" aria-label="地图视图工具">
-        <button class="map-text-tool" :disabled="operationBusy || !map.data.length" title="只清除 Web 内存缓存，不删除 SLAM 地图" @click="clearCache">清地图缓存</button>
+        <button class="map-text-tool" :disabled="operationBusy || !map.data.length" title="只清除 Web 显示缓存；运行中的 SLAM 会再次发布地图" @click="clearCache">清显示缓存</button>
         <button class="map-text-tool" :disabled="operationBusy || !map.data.length" title="将当前 SLAM 地图保存到工控机" @click="saveMap">保存当前地图</button>
         <button class="map-text-tool" :disabled="operationBusy" title="导入工控机地图；请选择同一张地图的 YAML 与 PGM 文件" @click="chooseMapFiles">导入地图</button>
         <input ref="mapFileInput" class="map-file-input" type="file" accept=".yaml,.yml,.pgm" multiple @change="importMapFiles">

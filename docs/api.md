@@ -15,7 +15,7 @@
 | GET | `/api/arm/pose` | 末端位姿 |
 | POST | `/api/arm/connect` | 手动建立经工控机指定网口的机械臂控制链路 |
 | POST | `/api/arm/disconnect` | 释放夹爪 IO 并断开机械臂控制链路 |
-| POST | `/api/visualization/map/cache/clear` | 清除 Web 地图与路径缓存，不清 SLAM |
+| POST | `/api/visualization/map/cache/clear` | 仅清除 Web 地图与路径显示缓存，不重置运行中的 SLAM |
 | GET | `/api/visualization/navigation/status` | 读取 Nav2 目标状态 |
 | POST | `/api/visualization/navigation/goal` | 向 Nav2 发送地图坐标与朝向 |
 | POST | `/api/visualization/navigation/cancel` | 取消当前 Nav2 目标 |
@@ -35,6 +35,9 @@
 | GET | `/api/runtime/status` | 工控机连通性和各运行任务状态 |
 | POST | `/api/runtime/start` | 按依赖顺序在后台启动全部受管任务 |
 | POST | `/api/runtime/stop` | 停止全部受管任务及其子进程 |
+| POST | `/api/runtime/mapping/manual/start` | 停止旧受管进程并从空白地图启动手动建图 |
+| POST | `/api/runtime/mapping/automatic/start` | 停止旧受管进程并从空白地图启动 Frontier 自动建图 |
+| POST | `/api/runtime/mapping/stop` | 停止建图整栈并清除 Web 地图/路径状态 |
 | POST | `/api/runtime/tasks/{task_id}/start` | 独立启动指定模块 |
 | POST | `/api/runtime/tasks/{task_id}/stop` | 独立停止指定模块 |
 | POST | `/api/runtime/tasks/{task_id}/restart` | 独立重启指定模块 |
