@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue'
-import CameraPanel from '@/components/CameraPanel.vue'
 import ChassisControl from '@/components/ChassisControl.vue'
 import MapCanvas from '@/components/MapCanvas.vue'
 import MappingControl from '@/components/MappingControl.vue'
@@ -47,8 +46,6 @@ onBeforeUnmount(() => visual.disconnect())
       />
 
       <div class="chassis-side-stack">
-        <CameraPanel :url="visual.config.camera_stream_url" :connected="visual.config.camera_connected" :error="visual.config.camera_error" />
-
         <aside class="chassis-console">
           <RuntimeControl />
           <MappingControl />

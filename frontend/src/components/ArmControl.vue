@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { robotApi, type ArmConfig } from '@/api/robot'
 import { useRobotStore, type Pose } from '@/stores/robot'
 
@@ -18,10 +18,6 @@ const defaultConfig: ArmConfig = {
 
 const store = useRobotStore()
 const config = ref<ArmConfig>(defaultConfig)
-const cameraUrl = ref('')
-const cameraFailed = ref(false)
-const cameraConnected = ref(false)
-const cameraError = ref('')
 const activePanel = ref<'joints' | 'pose'>('joints')
 const joints = ref<number[]>([0, 0, 0, 0, 0, 0])
 const pose = reactive<Record<keyof Pose, number>>({ x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 })
@@ -30,7 +26,6 @@ const poseSpeed = ref(5)
 const jointDirty = ref(false)
 const poseDirty = ref(false)
 const connectionAction = ref<'connect' | 'disconnect' | ''>('')
-let cameraPoll: number | undefined
 
 const trueHardwareMode = computed(() => store.state.system.mode === 'ros2')
 const toolMatches = computed(() => !config.value.expected_tool || store.state.arm.tool_frame === config.value.expected_tool)
@@ -137,31 +132,13 @@ onMounted(async () => {
   syncJoints()
   syncPose()
   try {
-    const [armConfig, visualConfig] = await Promise.all([robotApi.armConfig(), robotApi.visualizationConfig()])
+    const armConfig = await robotApi.armConfig()
     config.value = armConfig
     jointSpeed.value = armConfig.joint_speed_percent
     poseSpeed.value = armConfig.pose_speed_percent
-    cameraUrl.value = visualConfig.camera_stream_url
-    cameraConnected.value = visualConfig.camera_connected
-    cameraError.value = visualConfig.camera_error
   } catch {
     // The global connection banner already reports backend failures.
   }
-  cameraPoll = window.setInterval(async () => {
-    try {
-      const visualConfig = await robotApi.visualizationConfig()
-      cameraUrl.value = visualConfig.camera_stream_url
-      cameraConnected.value = visualConfig.camera_connected
-      cameraError.value = visualConfig.camera_error
-      if (visualConfig.camera_connected) cameraFailed.value = false
-    } catch {
-      cameraConnected.value = false
-    }
-  }, 1000)
-})
-
-onBeforeUnmount(() => {
-  if (cameraPoll) window.clearInterval(cameraPoll)
 })
 </script>
 
@@ -169,18 +146,16 @@ onBeforeUnmount(() => {
   <div class="arm-workspace">
     <section class="panel arm-observation">
       <div class="section-title arm-vision-title">
-        <div><span class="eyebrow">EYE IN HAND</span><h2>末端视觉与实时状态</h2></div>
-        <span>{{ cameraConnected && !cameraFailed ? 'LIVE' : 'CAMERA WAITING' }}</span>
+        <div><span class="eyebrow">ROBOT STATE</span><h2>末端实时状态</h2></div>
+        <span>VIDEO OFF</span>
       </div>
 
       <div class="arm-visual-stage">
-        <img v-if="cameraUrl && !cameraFailed" :src="cameraUrl" alt="机械臂末端 RealSense" @load="cameraFailed = false" @error="cameraFailed = true" />
-        <div v-if="!cameraConnected || cameraFailed" class="arm-camera-empty camera-waiting">
+        <div class="arm-camera-empty camera-waiting">
           <div class="arm-grid-plane"><i class="axis-x"></i><i class="axis-y"></i><i class="axis-z"></i><b>TCP</b></div>
-          <strong>{{ cameraError || '正在连接末端 RealSense' }}</strong>
-          <span>仅显示真实相机画面 · 机械臂控制与相机链路相互独立</span>
+          <strong>视频实时可视化已关闭</strong>
+          <span>相机采集、编码和网络传输均不启动</span>
         </div>
-        <div class="vision-reticle"><i></i><i></i><b></b></div>
         <div class="vision-hud top">
           <span>REALMAN {{ config.model }} · {{ config.transport === 'industrial_pc' ? `IPC/${config.network_interface || '--'}` : 'DIRECT' }}</span>
           <span>{{ store.state.arm.connected ? 'CTRL LINKED' : 'CTRL OFFLINE' }}</span>

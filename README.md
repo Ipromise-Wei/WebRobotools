@@ -116,16 +116,9 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 - 六关节目标编辑、低速执行与 `grasp_studio` 待命位；
 - TCP 位姿直线运动，页面使用 mm/deg，接口使用 m/rad；
 - 工具 IO 夹爪张开、闭合和输出释放；
-- 机械臂停止与夹爪 IO 释放的组合停止操作；
-- 末端相机画面入口，视频流地址沿用 `visualization.camera_stream_url`。
+- 机械臂停止与夹爪 IO 释放的组合停止操作。
 
-`visualization.realsense.enabled` 默认启用。当前配置由工控机使用 FFmpeg 从 D435 彩色节点 `/dev/video4` 采集 `1280×720@12fps`、JPEG 质量 70 的低延迟预览。工控机只保留最新 JPEG，Web 后端通过 SSH 按需取帧，再由 `/api/visualization/camera/stream` 输出共享 MJPEG；因此不会把旧帧连续排队到浏览器。机械臂页和底盘页复用同一视频源，超过 800 KB 的显示帧会丢弃。该接口不生成模拟帧。若把 `source` 改为 `local`，则改用 Web 服务器本机的 `pyrealsense2` 采集。安装本机采集依赖后需要重新执行：
-
-```bash
-./scripts/setup_ros2_backend.sh
-```
-
-同一台 RealSense 通常只能被一个采集进程占用；使用 Web 视频流时应先退出正在独占相机的 `grasp_studio` 桌面进程。
+从 v0.7.3 起，实时视频可视化完全关闭。`visualization.realsense.enabled` 为 `false`，Web 后端不会启动 RealSense 采集、FFmpeg 编码或 SSH 视频中继，底盘页和机械臂页也不会请求 MJPEG 视频。
 
 Web 停止按钮不是安全等级急停，调试真机时仍必须保证示教器或物理急停可触达。完整接入说明见 [docs/arm.md](docs/arm.md)。
 
@@ -146,4 +139,4 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv-ros2/bin/pytest
 
 系统边界及接口约定见 [docs/architecture.md](docs/architecture.md) 和 [docs/api.md](docs/api.md)。
 
-每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.7.2 版本说明](docs/releases/v0.7.2.md)。
+每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.7.3 版本说明](docs/releases/v0.7.3.md)。

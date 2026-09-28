@@ -59,7 +59,9 @@ ros2:
 visualization:
   camera_stream_url: ""
   realsense:
-    enabled: true
+    # Video visualization is fully disabled so camera capture, FFmpeg, SSH
+    # frame forwarding and browser MJPEG decoding consume no runtime resource.
+    enabled: false
     source: industrial_pc
     serial: "935523021292"
     video_device: /dev/video4
