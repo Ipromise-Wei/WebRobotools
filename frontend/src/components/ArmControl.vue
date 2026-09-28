@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { robotApi, type ArmConfig } from '@/api/robot'
+import axios from 'axios'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { robotApi, type ArmConfig, type VisualizationConfig } from '@/api/robot'
 import { useRobotStore, type Pose } from '@/stores/robot'
+import ArmTeach3D from '@/components/ArmTeach3D.vue'
 
 const radiansToDegrees = 180 / Math.PI
 const degreesToRadians = Math.PI / 180
@@ -15,10 +17,17 @@ const defaultConfig: ArmConfig = {
   standby_joints_deg: [178, 37.258, -65.159, 4.531, -107.568, 6.608],
   gripper_enabled: false, gripper_commands_enabled: false,
 }
+const defaultVisualization: VisualizationConfig = {
+  camera_stream_url: '', camera_enabled: false, camera_connected: false,
+  camera_serial: '', camera_error: '', map_topic: '', plan_topic: '',
+  motion_commands_enabled: false, navigation_ready: false, navigation_reason: '',
+}
 
 const store = useRobotStore()
 const config = ref<ArmConfig>(defaultConfig)
 const activePanel = ref<'joints' | 'pose'>('joints')
+const visualMode = ref<'video' | 'teach'>('video')
+const teachPoseMode = ref<'live' | 'target'>('live')
 const joints = ref<number[]>([0, 0, 0, 0, 0, 0])
 const pose = reactive<Record<keyof Pose, number>>({ x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 })
 const jointSpeed = ref(5)
@@ -26,6 +35,10 @@ const poseSpeed = ref(5)
 const jointDirty = ref(false)
 const poseDirty = ref(false)
 const connectionAction = ref<'connect' | 'disconnect' | ''>('')
+const visualization = ref<VisualizationConfig>(defaultVisualization)
+const cameraAction = ref(false)
+const cameraImageFailed = ref(false)
+let cameraPoll: number | undefined
 
 const trueHardwareMode = computed(() => store.state.system.mode === 'ros2')
 const toolMatches = computed(() => !config.value.expected_tool || store.state.arm.tool_frame === config.value.expected_tool)
@@ -45,10 +58,40 @@ const poseReadout = computed(() => {
   const value = store.state.arm.pose
   return [value.x, value.y, value.z].map((item) => `${(item * 1000).toFixed(1)}`).join(' / ')
 })
+const cameraMessage = computed(() => {
+  if (!visualization.value.camera_enabled) return '视频实时可视化已关闭'
+  if (visualization.value.camera_error) return visualization.value.camera_error
+  if (cameraImageFailed.value) return '视频连接失败，请关闭后重试'
+  return visualization.value.camera_connected ? '视频流已连接' : '正在连接 RealSense…'
+})
+const teachJoints = computed(() => teachPoseMode.value === 'target' ? joints.value : store.state.arm.joints)
+
+async function refreshCamera() {
+  visualization.value = await robotApi.visualizationConfig()
+}
+
+async function toggleCamera() {
+  if (cameraAction.value) return
+  cameraAction.value = true
+  cameraImageFailed.value = false
+  try {
+    visualization.value = await robotApi.setCameraEnabled(!visualization.value.camera_enabled)
+  } catch (error) {
+    visualization.value = {
+      ...visualization.value,
+      camera_error: axios.isAxiosError(error)
+        ? String(error.response?.data?.detail || error.message)
+        : '视频开关操作失败',
+    }
+  } finally {
+    cameraAction.value = false
+  }
+}
 
 function syncJoints() {
   joints.value = store.state.arm.joints.map((value) => Number(value.toFixed(3)))
   jointDirty.value = false
+  teachPoseMode.value = 'live'
 }
 
 function syncPose() {
@@ -89,6 +132,7 @@ async function executeJoints() {
   if (!confirmAction(`以 ${jointSpeed.value}% 速度执行六轴关节运动？`)) return
   if (await store.command(() => robotApi.moveJoints([...joints.value], jointSpeed.value))) {
     jointDirty.value = false
+    teachPoseMode.value = 'live'
   }
 }
 
@@ -122,6 +166,7 @@ function changeJoint(index: number, value: number) {
   if (!Number.isFinite(value)) return
   joints.value[index] = Math.max(index === 5 ? -360 : -180, Math.min(index === 5 ? 360 : 180, value))
   jointDirty.value = true
+  teachPoseMode.value = 'target'
 }
 
 function changeJointFromInput(index: number, event: Event) {
@@ -139,6 +184,15 @@ onMounted(async () => {
   } catch {
     // The global connection banner already reports backend failures.
   }
+  try { await refreshCamera() }
+  catch { /* Polling below retries after backend startup. */ }
+  cameraPoll = window.setInterval(() => {
+    void refreshCamera().catch(() => undefined)
+  }, 2000)
+})
+
+onBeforeUnmount(() => {
+  if (cameraPoll) clearInterval(cameraPoll)
 })
 </script>
 
@@ -147,20 +201,50 @@ onMounted(async () => {
     <section class="panel arm-observation">
       <div class="section-title arm-vision-title">
         <div><span class="eyebrow">ROBOT STATE</span><h2>末端实时状态</h2></div>
-        <span>VIDEO OFF</span>
+        <div class="arm-vision-actions">
+          <nav class="arm-view-switch" aria-label="可视化模式">
+            <button :class="{ active: visualMode === 'video' }" @click="visualMode = 'video'">实时视频</button>
+            <button :class="{ active: visualMode === 'teach' }" @click="visualMode = 'teach'">3D 示教</button>
+          </nav>
+          <button
+            v-if="visualMode === 'video'"
+            type="button"
+            class="camera-visual-toggle"
+            :class="{ on: visualization.camera_enabled }"
+            :disabled="cameraAction"
+            @click="toggleCamera"
+          >{{ cameraAction ? '切换中…' : visualization.camera_enabled ? 'VIDEO ON' : 'VIDEO OFF' }}</button>
+        </div>
       </div>
 
       <div class="arm-visual-stage">
-        <div class="arm-camera-empty camera-waiting">
-          <div class="arm-grid-plane"><i class="axis-x"></i><i class="axis-y"></i><i class="axis-z"></i><b>TCP</b></div>
-          <strong>视频实时可视化已关闭</strong>
-          <span>相机采集、编码和网络传输均不启动</span>
-        </div>
-        <div class="vision-hud top">
-          <span>REALMAN {{ config.model }} · {{ config.transport === 'industrial_pc' ? `IPC/${config.network_interface || '--'}` : 'DIRECT' }}</span>
-          <span>{{ store.state.arm.connected ? 'CTRL LINKED' : 'CTRL OFFLINE' }}</span>
-        </div>
-        <div class="vision-hud bottom"><span>TCP {{ poseReadout }} mm</span><span>{{ store.state.arm.work_frame || 'NO WORK FRAME' }} / {{ store.state.arm.tool_frame || 'NO TOOL FRAME' }}</span></div>
+        <template v-if="visualMode === 'video'">
+          <img
+            v-if="visualization.camera_enabled && visualization.camera_stream_url && !cameraImageFailed"
+            :src="visualization.camera_stream_url"
+            alt="RealSense 实时画面"
+            @load="cameraImageFailed = false"
+            @error="cameraImageFailed = true"
+          />
+          <div v-if="!visualization.camera_enabled || !visualization.camera_connected || cameraImageFailed" class="arm-camera-empty camera-waiting">
+            <div class="arm-grid-plane"><i class="axis-x"></i><i class="axis-y"></i><i class="axis-z"></i><b>TCP</b></div>
+            <strong>{{ cameraMessage }}</strong>
+            <span>{{ visualization.camera_enabled ? (visualization.camera_serial || '正在启动相机采集与网络传输') : '相机采集、编码和网络传输均不启动' }}</span>
+          </div>
+          <div class="vision-hud top">
+            <span>REALMAN {{ config.model }} · {{ config.transport === 'industrial_pc' ? `IPC/${config.network_interface || '--'}` : 'DIRECT' }}</span>
+            <span>{{ store.state.arm.connected ? 'CTRL LINKED' : 'CTRL OFFLINE' }}</span>
+          </div>
+          <div class="vision-hud bottom"><span>TCP {{ poseReadout }} mm</span><span>{{ store.state.arm.work_frame || 'NO WORK FRAME' }} / {{ store.state.arm.tool_frame || 'NO TOOL FRAME' }}</span></div>
+        </template>
+        <ArmTeach3D
+          v-else
+          :joints="teachJoints"
+          :pose-mode="teachPoseMode"
+          :target-dirty="jointDirty"
+          @update:pose-mode="teachPoseMode = $event"
+          @reset-target="syncJoints"
+        />
       </div>
 
       <div class="arm-joint-telemetry">

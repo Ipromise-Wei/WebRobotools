@@ -179,6 +179,7 @@ class RuntimeTaskSettings(BaseModel):
     startup_delay: float = Field(default=2.0, ge=0, le=120)
     ready_command: str = ""
     ready_timeout: float = Field(default=0, ge=0, le=300)
+    ready_probe_timeout: float = Field(default=15, ge=1, le=60)
     on_start_command: str = ""
     on_stop_command: str = ""
     include_in_start_all: bool = True

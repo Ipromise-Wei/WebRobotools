@@ -1,6 +1,5 @@
 import axios from 'axios'
 import type { Pose, RobotState } from '@/stores/robot'
-import type { VisualizationConfig } from '@/stores/visualization'
 import { decodeMapSnapshot, type MapWireSnapshot } from '@/mapTransport'
 
 export const api = axios.create({
@@ -47,6 +46,7 @@ export interface RuntimeStatus { agent_version: number; orchestrating: boolean; 
 export interface RuntimeActionResponse { success: boolean; status: RuntimeStatus }
 export interface MapLibrary { maps: string[] }
 export interface NavigationStatus { phase: 'idle' | 'sending' | 'navigating' | 'canceling' | 'succeeded' | 'canceled' | 'failed'; message: string; x: number | null; y: number | null; yaw: number | null }
+export interface VisualizationConfig { camera_stream_url: string; camera_enabled: boolean; camera_connected: boolean; camera_serial: string; camera_error: string; map_topic: string; plan_topic: string; motion_commands_enabled: boolean; navigation_ready: boolean; navigation_reason: string }
 
 export const robotApi = {
   status: () => api.get<RobotState>('/system/status').then((response) => response.data),
@@ -67,6 +67,7 @@ export const robotApi = {
   closeGripper: () => api.post<CommandResponse>('/gripper/close', {}, { timeout: 20000 }).then((response) => response.data),
   stopGripper: () => api.post<CommandResponse>('/gripper/stop', {}, { timeout: 10000 }).then((response) => response.data),
   visualizationConfig: () => api.get<VisualizationConfig>('/visualization/config').then((response) => response.data),
+  setCameraEnabled: (enabled: boolean) => api.post<VisualizationConfig>('/visualization/camera/enabled', { enabled }).then((response) => response.data),
   map: () => api.get<MapWireSnapshot>('/visualization/map').then((response) => decodeMapSnapshot(response.data)),
   clearMapCache: () => api.post<MapWireSnapshot>('/visualization/map/cache/clear').then((response) => decodeMapSnapshot(response.data)),
   navigationStatus: () => api.get<NavigationStatus>('/visualization/navigation/status').then((response) => response.data),

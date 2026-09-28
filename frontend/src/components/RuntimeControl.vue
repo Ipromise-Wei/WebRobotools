@@ -30,6 +30,14 @@ const standardStackIds = basicModuleIds
 const baseTasks = computed(() => status.value.tasks.filter((task) => basicModuleIds.has(task.id)))
 const basicModulesActive = computed(() => baseTasks.value.some((task) => ['starting', 'running', 'stopping', 'error'].includes(task.state)))
 const basicModulesReady = computed(() => baseTasks.value.length === basicModuleIds.size && baseTasks.value.every((task) => task.state === 'running'))
+const baseCompleted = computed(() => baseTasks.value.filter((task) => task.state === 'running').length)
+const baseProgress = computed(() => baseTasks.value.length
+  ? Math.round(baseCompleted.value / baseTasks.value.length * 100)
+  : 0)
+const baseProgressVisible = computed(() => status.value.orchestrating &&
+  ['basic_modules', '__default__'].includes(status.value.orchestrating_profile))
+const baseCurrentTask = computed(() => baseTasks.value.find((task) => task.state === 'starting')
+  || baseTasks.value.find((task) => task.state !== 'running'))
 const standardStackRunning = computed(() => {
   const tasks = status.value.tasks.filter((task) => standardStackIds.has(task.id))
   return tasks.length === standardStackIds.size && tasks.every((task) => task.state === 'running')
@@ -175,6 +183,17 @@ onBeforeUnmount(() => timer && clearInterval(timer))
         :title="basicModulesReady ? '基础功能与 Nav2 运行中' : basicModulesActive ? '基础功能与 Nav2 正在启动、停止或异常' : '一键启动基础功能与 Nav2'"
         @click="toggleBasicModules"
       ><i></i></button>
+    </div>
+    <div
+      v-if="baseProgressVisible"
+      class="module-start-progress"
+      role="progressbar"
+      :aria-valuenow="baseProgress"
+      aria-valuemin="0"
+      aria-valuemax="100"
+    >
+      <p><span>{{ baseCurrentTask ? `${baseCurrentTask.label} · ${baseCurrentTask.message}` : '正在准备基础模块' }}</span><b>{{ baseCompleted }}/{{ baseTasks.length }} · {{ baseProgress }}%</b></p>
+      <i><b :style="{ width: `${baseProgress}%` }"></b></i>
     </div>
     <p class="runtime-basic-note">程序启动后自动初始化，默认不运行 SLAM；关闭此模块才会停止全部 Web 管理进程。</p>
     <div v-if="visibleTasks.length" class="runtime-switches">

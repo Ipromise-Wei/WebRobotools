@@ -1,23 +1,40 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { onBeforeUnmount, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import Login from '@/views/Login.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useRobotStore } from '@/stores/robot'
 
 const auth = useAuthStore()
 const store = useRobotStore()
+const route = useRoute()
+const router = useRouter()
 
-onMounted(() => {
-  void auth.initialize()
-})
 onBeforeUnmount(() => store.disconnect())
 
+function safeLoginRedirect() {
+  const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+  return redirect.startsWith('/') && !redirect.startsWith('//') && redirect !== '/login'
+    ? redirect
+    : '/'
+}
+
 watch(
-  () => auth.authenticated,
-  (authenticated) => {
-    if (authenticated) void store.initialize()
-    else store.disconnect()
+  () => [auth.ready, auth.authenticated] as const,
+  ([ready, authenticated]) => {
+    if (!ready) return
+    if (authenticated) {
+      void store.initialize()
+      if (route.name === 'login') void router.replace(safeLoginRedirect())
+      return
+    }
+    store.disconnect()
+    if (route.name !== 'login') {
+      const redirect = route.fullPath === '/' ? undefined : route.fullPath
+      void router.replace({ name: 'login', query: redirect ? { redirect } : undefined })
+    }
   },
+  { immediate: true },
 )
 
 function signOut() {
@@ -29,7 +46,7 @@ function signOut() {
   <div v-if="!auth.ready" class="auth-loading" aria-live="polite">
     <span class="brand-mark">AI</span><p>正在验证安全会话…</p>
   </div>
-  <Login v-else-if="!auth.authenticated" />
+  <Login v-else-if="!auth.authenticated || route.name === 'login'" />
   <div v-else class="app-shell">
     <aside class="sidebar">
       <div class="brand">

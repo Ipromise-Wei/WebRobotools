@@ -19,6 +19,38 @@ const manualSelected = computed(() => !automaticSelected.value && (slamRunning.v
 const baseTaskIds = ['chassis', 'lidar', 'localization', 'laser_scan', 'telemetry_relay', 'navigation']
 const baseReady = computed(() => baseTaskIds.every((id) => taskState(id) === 'running'))
 const runtimeOrchestrating = computed(() => status.value?.orchestrating === true)
+const failedMappingTask = computed(() => status.value?.tasks.find((task) =>
+  ['slam', 'frontier_exploration'].includes(task.id) && task.state === 'error',
+))
+const mappingFailure = computed(() => {
+  const task = failedMappingTask.value
+  if (!task) return ''
+  if (task.message.includes('timed out')) return `${task.label} 就绪检测超时，模块已安全停止，请重试`
+  return `${task.label} 启动失败：${task.message}`
+})
+const displayError = computed(() => error.value || mappingFailure.value)
+const mappingProgressTaskIds = computed(() =>
+  requestedProfile.value === 'automatic_mapping'
+    ? ['slam', 'frontier_exploration']
+    : ['slam'],
+)
+const mappingProgressTasks = computed(() => mappingProgressTaskIds.value.map((id) =>
+  status.value?.tasks.find((task) => task.id === id),
+).filter((task): task is RuntimeStatus['tasks'][number] => !!task))
+const mappingCompleted = computed(() => mappingProgressTasks.value.filter((task) => task.state === 'running').length)
+const mappingProgress = computed(() => mappingProgressTasks.value.length
+  ? Math.round(mappingCompleted.value / mappingProgressTasks.value.length * 100)
+  : 0)
+const mappingProgressVisible = computed(() => runtimeOrchestrating.value &&
+  ['manual_mapping', 'automatic_mapping'].includes(requestedProfile.value))
+const mappingCurrentTask = computed(() => mappingProgressTasks.value.find((task) => task.state === 'starting')
+  || mappingProgressTasks.value.find((task) => task.state !== 'running'))
+const mappingStateText = computed(() => {
+  if (automaticSelected.value) return automaticRunning.value ? '自动建图运行中' : '自动建图启动中'
+  if (manualSelected.value) return runtimeOrchestrating.value ? '手动建图启动中' : '手动建图运行中'
+  if (mappingFailure.value) return '建图启动失败'
+  return baseReady.value ? '未选择建图，可手动驾驶' : '基础功能与 Nav2 初始化中'
+})
 const manualDisabled = computed(() => busy.value || (!manualSelected.value && (!baseReady.value || runtimeOrchestrating.value)))
 const automaticDisabled = computed(() => busy.value || (!automaticSelected.value && (!baseReady.value || runtimeOrchestrating.value)))
 const actionError = (reason: unknown) => axios.isAxiosError(reason)
@@ -95,11 +127,20 @@ onBeforeUnmount(() => refreshTimer && clearInterval(refreshTimer))
 <template>
   <section class="mapping-control">
     <header><span class="eyebrow">MAPPING</span><h3>建图管理</h3></header>
-    <p class="mapping-state">
-      {{ automaticSelected ? (automaticRunning ? '自动建图运行中' : '自动建图启动中') : manualSelected ? (runtimeOrchestrating ? '手动建图启动中' : '手动建图运行中') : baseReady ? '未选择建图，可手动驾驶' : '基础功能与 Nav2 初始化中' }}
-    </p>
+    <p class="mapping-state">{{ mappingStateText }}</p>
     <p class="mapping-hint">默认不运行 SLAM：手柄只驾驶底盘，不会绘制地图。勾选手动或自动建图才启动建图模块。</p>
-    <p v-if="error" class="mapping-error" role="alert">{{ error }}</p>
+    <div
+      v-if="mappingProgressVisible"
+      class="mapping-progress"
+      role="progressbar"
+      :aria-valuenow="mappingProgress"
+      aria-valuemin="0"
+      aria-valuemax="100"
+    >
+      <p><span>{{ mappingCurrentTask ? `${mappingCurrentTask.label} · ${mappingCurrentTask.message}` : '正在准备建图模块' }}</span><b>{{ mappingCompleted }}/{{ mappingProgressTasks.length }} · {{ mappingProgress }}%</b></p>
+      <i><b :style="{ width: `${mappingProgress}%` }"></b></i>
+    </div>
+    <p v-if="displayError" class="mapping-error" role="alert">{{ displayError }}</p>
     <div class="mapping-actions">
       <label class="mapping-option" :class="{ active: manualSelected, disabled: manualDisabled }">
         <input type="checkbox" :checked="manualSelected" :disabled="manualDisabled" @change="toggleManual">
@@ -119,6 +160,12 @@ header { display: flex; align-items: baseline; gap: 8px; } h3 { margin: 0; font-
 .mapping-state { margin: 8px 0; font-size: 11px; color: #d8edf3; }
 .mapping-hint { margin: 0 0 8px; color: #87a8b6; font-size: 9px; line-height: 1.45; }
 .mapping-error { margin: 8px 0; color: #ff8f8f; font-size: 11px; }.mapping-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.mapping-progress { margin: 8px 0; }
+.mapping-progress p { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 5px; color: #91aaa3; font-size: 9px; }
+.mapping-progress p span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mapping-progress p b { flex: none; color: #a9c9ae; font: 700 9px ui-monospace,monospace; }
+.mapping-progress > i { display: block; height: 5px; overflow: hidden; border-radius: 5px; background: #263137; }
+.mapping-progress > i > b { display: block; height: 100%; min-width: 4px; border-radius: inherit; background: #7faa88; transition: width .3s ease; }
 .mapping-option { display: flex; align-items: center; gap: 6px; border: 1px solid #2a536a; border-radius: 5px; padding: 6px 9px; color: #dceef4; background: #10283a; font-size: 11px; cursor: pointer; }
 .mapping-option:hover:not(.disabled), .mapping-option.active { border-color: #35cdb7; color: #58e7d0; }
 .mapping-option.disabled { opacity: .45; cursor: not-allowed; }

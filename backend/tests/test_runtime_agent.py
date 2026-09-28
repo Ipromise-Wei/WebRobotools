@@ -7,9 +7,32 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from unittest.mock import patch
+
+from app import runtime_agent
 
 
 AGENT = Path(__file__).resolve().parents[1] / "app" / "runtime_agent.py"
+
+
+def test_readiness_probe_timeout_is_retryable() -> None:
+    with patch.object(
+        runtime_agent.subprocess,
+        "run",
+        side_effect=subprocess.TimeoutExpired("probe", 5),
+    ):
+        assert runtime_agent.ready_command_succeeded({}, "probe", 5) is False
+
+
+def test_readiness_probe_replaces_legacy_inner_timeout() -> None:
+    completed = subprocess.CompletedProcess([], 0)
+    with patch.object(runtime_agent.subprocess, "run", return_value=completed) as run:
+        assert runtime_agent.ready_command_succeeded(
+            {}, "timeout 3 ros2 topic echo /map --once", 15,
+        ) is True
+    shell = run.call_args.args[0][-1]
+    assert "exec ros2 topic echo /map --once" in shell
+    assert "timeout 3" not in shell
 
 
 def call_agent(state_dir: str, *arguments: str) -> dict[str, object]:

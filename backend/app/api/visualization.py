@@ -5,13 +5,18 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.dependencies import get_map_manager
 from app.core.map_manager import MapManager
-from app.models.visualization import CameraStreamStatus, NavigationGoalRequest, NavigationStatus, VisualizationConfig
+from app.models.visualization import (
+    CameraEnabledRequest,
+    CameraStreamStatus,
+    NavigationGoalRequest,
+    NavigationStatus,
+    VisualizationConfig,
+)
 
 router = APIRouter()
 
 
-@router.get("/config", response_model=VisualizationConfig)
-async def config(request: Request) -> VisualizationConfig:
+def _visualization_config(request: Request) -> VisualizationConfig:
     settings = request.app.state.settings
     adapter = request.app.state.ros2_adapter
     camera = request.app.state.realsense_stream
@@ -36,6 +41,24 @@ async def config(request: Request) -> VisualizationConfig:
         navigation_ready=navigation_ready,
         navigation_reason=navigation_reason,
     )
+
+
+@router.get("/config", response_model=VisualizationConfig)
+async def config(request: Request) -> VisualizationConfig:
+    return _visualization_config(request)
+
+
+@router.post("/camera/enabled", response_model=VisualizationConfig)
+async def set_camera_enabled(
+    request: Request, payload: CameraEnabledRequest
+) -> VisualizationConfig:
+    if request.app.state.settings.visualization.camera_stream_url.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="外部视频流由服务端配置管理，不能在页面中动态启停",
+        )
+    await request.app.state.realsense_stream.set_enabled(payload.enabled)
+    return _visualization_config(request)
 
 
 @router.get("/camera/status", response_model=CameraStreamStatus)

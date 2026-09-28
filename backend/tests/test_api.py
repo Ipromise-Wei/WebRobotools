@@ -34,6 +34,20 @@ async def _run_api_scenario() -> None:
                 assert visual.status_code == 200
                 assert visual.json()["map_topic"] == "/webrobot/web_map"
                 assert visual.json()["motion_commands_enabled"] is False
+                assert visual.json()["camera_enabled"] is False
+
+                camera_on = await client.post(
+                    "/api/visualization/camera/enabled", json={"enabled": True}
+                )
+                assert camera_on.status_code == 200
+                assert camera_on.json()["camera_enabled"] is True
+                assert camera_on.json()["camera_stream_url"] == "/api/visualization/camera/stream"
+
+                camera_off = await client.post(
+                    "/api/visualization/camera/enabled", json={"enabled": False}
+                )
+                assert camera_off.status_code == 200
+                assert camera_off.json()["camera_enabled"] is False
 
                 runtime = await client.get("/api/runtime/status")
                 assert runtime.status_code == 200

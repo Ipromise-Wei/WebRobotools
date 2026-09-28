@@ -1,11 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { robotApi, type NavigationStatus } from '@/api/robot'
+import { robotApi, type NavigationStatus, type VisualizationConfig } from '@/api/robot'
 import { decodeMapSnapshot, emptyMap, type MapSnapshot, type MapWireSnapshot } from '@/mapTransport'
 
 export type { MapSnapshot } from '@/mapTransport'
-export interface VisualizationConfig { camera_stream_url: string; camera_enabled: boolean; camera_connected: boolean; camera_serial: string; camera_error: string; map_topic: string; plan_topic: string; motion_commands_enabled: boolean; navigation_ready: boolean; navigation_reason: string }
-
 export const useVisualizationStore = defineStore('visualization', () => {
   const map = ref(emptyMap)
   const config = ref<VisualizationConfig>({ camera_stream_url: '', camera_enabled: false, camera_connected: false, camera_serial: '', camera_error: '', map_topic: '/webrobot/web_map', plan_topic: '/webrobot/web_plan', motion_commands_enabled: false, navigation_ready: false, navigation_reason: '正在连接后端' })

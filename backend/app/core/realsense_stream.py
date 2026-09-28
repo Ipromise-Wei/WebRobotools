@@ -37,6 +37,8 @@ class RealSenseStream:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._service_started = False
+        self._enabled = settings.enabled
+        self._toggle_lock = asyncio.Lock()
         self._stream_clients = 0
         self._jpeg: bytes | None = None
         self._status = CameraStreamStatus(
@@ -48,8 +50,6 @@ class RealSenseStream:
         )
 
     async def start(self) -> None:
-        if not self.settings.enabled:
-            return
         # Do not open the camera or an SSH/FFmpeg pipeline at backend startup.
         # Capture starts only when a browser actually requests the MJPEG URL.
         with self._condition:
@@ -69,7 +69,7 @@ class RealSenseStream:
 
     def _acquire_stream(self) -> None:
         with self._condition:
-            if not self.settings.enabled or not self._service_started:
+            if not self._enabled or not self._service_started:
                 raise RuntimeError("RealSense 视频服务未启动")
             self._stream_clients += 1
             self._start_capture_locked()
@@ -84,15 +84,33 @@ class RealSenseStream:
                 self._condition.notify_all()
 
     async def stop(self) -> None:
+        async with self._toggle_lock:
+            with self._condition:
+                self._service_started = False
+            await self._disable()
+
+    async def set_enabled(self, enabled: bool) -> CameraStreamStatus:
+        """Enable or disable capture at runtime without persisting config."""
+        async with self._toggle_lock:
+            if enabled:
+                with self._condition:
+                    self._enabled = True
+                    self._stop.clear()
+                self._update_status(enabled=True, error="")
+            else:
+                await self._disable()
+            return self.status()
+
+    async def _disable(self) -> None:
         with self._condition:
-            self._service_started = False
+            self._enabled = False
             self._stream_clients = 0
             self._stop.set()
             self._condition.notify_all()
-        thread, self._thread = self._thread, None
+            thread = self._thread
         if thread is not None:
             await asyncio.to_thread(thread.join, 3.0)
-        self._update_status(connected=False)
+        self._update_status(enabled=False, connected=False, error="")
 
     def status(self) -> CameraStreamStatus:
         with self._condition:
@@ -138,7 +156,11 @@ class RealSenseStream:
             with self._condition:
                 if self._thread is threading.current_thread():
                     self._thread = None
-                restart = self._service_started and self._stream_clients > 0
+                restart = (
+                    self._enabled
+                    and self._service_started
+                    and self._stream_clients > 0
+                )
                 if restart:
                     self._start_capture_locked()
             # A successor has already started for a newly connected browser;

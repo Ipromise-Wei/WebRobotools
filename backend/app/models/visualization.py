@@ -51,6 +51,10 @@ class VisualizationConfig(BaseModel):
     navigation_reason: str = ""
 
 
+class CameraEnabledRequest(BaseModel):
+    enabled: bool
+
+
 class CameraStreamStatus(BaseModel):
     enabled: bool = False
     source: str = "local"

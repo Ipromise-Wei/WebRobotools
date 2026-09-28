@@ -197,6 +197,35 @@ def run_hook(manifest: dict[str, Any], command: str, timeout: float, label: str)
         raise RuntimeError(f"{label} failed with exit code {result.returncode}")
 
 
+def ready_command_succeeded(
+    manifest: dict[str, Any], command: str, timeout: float = 15
+) -> bool:
+    """Run one readiness probe; a probe timeout is retryable, not fatal."""
+    # Older manifests wrapped ROS probes in ``timeout 3``. That duration is
+    # shorter than DDS discovery can take on the IPC, so remove only this
+    # simple legacy wrapper and let the supervisor enforce the configured
+    # per-probe timeout itself.
+    arguments = shlex.split(command)
+    if len(arguments) > 2 and arguments[0] == "timeout":
+        try:
+            float(arguments[1])
+        except ValueError:
+            pass
+        else:
+            command = shlex.join(arguments[2:])
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", shell_command(manifest, command)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
 def terminate_group(pid: int | None, expected_start: int | None = None, force: bool = False) -> None:
     if not alive(pid, expected_start):
         return
@@ -248,12 +277,8 @@ def supervise_task(manifest: dict[str, Any], task_id: str) -> int:
             while not stop_requested:
                 if process.poll() is not None:
                     raise RuntimeError(f"就绪前退出，退出码 {process.returncode}")
-                check = subprocess.run(
-                    ["bash", "-lc", shell_command(manifest, ready_command)],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=5, check=False,
-                )
-                if check.returncode == 0:
+                probe_timeout = float(config.get("ready_probe_timeout", 15))
+                if ready_command_succeeded(manifest, ready_command, probe_timeout):
                     break
                 if time.monotonic() >= ready_deadline:
                     raise RuntimeError("等待数据就绪超时")

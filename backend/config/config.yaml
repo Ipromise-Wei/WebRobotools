@@ -151,8 +151,12 @@ remote_runtime:
       label: SLAM Toolbox
       command: ros2 launch fast_lio slam_mapping.launch.py
       startup_delay: 2
-      ready_command: timeout 3 ros2 topic echo /map --once --qos-reliability reliable --qos-durability transient_local
+      # ROS2 CLI discovery can take several seconds on the loaded IPC. Give
+      # each probe enough time to receive the transient-local map; the outer
+      # ready_timeout still bounds the complete SLAM startup.
+      ready_command: ros2 topic echo /map --once --qos-reliability reliable --qos-durability transient_local
       ready_timeout: 60
+      ready_probe_timeout: 15
       include_in_start_all: false
       dependencies: [laser_scan]
     - id: telemetry_relay

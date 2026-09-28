@@ -171,3 +171,19 @@ def test_camera_capture_waits_for_a_browser_stream_request() -> None:
         await stream.stop()
 
     asyncio.run(scenario())
+
+
+def test_camera_can_be_enabled_and_disabled_at_runtime() -> None:
+    async def scenario() -> None:
+        stream = RealSenseStream(RealSenseSettings(enabled=False))
+        await stream.start()
+
+        enabled = await stream.set_enabled(True)
+        assert enabled.enabled is True
+        assert stream._thread is None
+
+        disabled = await stream.set_enabled(False)
+        assert disabled.enabled is False
+        assert disabled.connected is False
+
+    asyncio.run(scenario())
