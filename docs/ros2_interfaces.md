@@ -8,7 +8,7 @@
 | 订阅 | `/battery_state` | `sensor_msgs/msg/BatteryState` | 电池状态 |
 | 工控机中继订阅 | `/map` | `nav_msgs/msg/OccupancyGrid` | 原始 SLAM 地图；只在工控机本地保留和校验 |
 | 工控机中继订阅 | `/plan` | `nav_msgs/msg/Path` | 完整 Nav2 全局路径；只在工控机本地处理 |
-| Web 订阅 | `/webrobot/web_map` | `nav_msgs/msg/OccupancyGrid` | 最多 65,536 栅格、1 Hz、Best-Effort 的显示地图 |
+| Web 订阅 | `/webrobot/web_map` | `nav_msgs/msg/OccupancyGrid` | 最多 262,144 栅格、2 Hz、Best-Effort 的显示地图 |
 | Web 订阅 | `/webrobot/web_plan` | `nav_msgs/msg/Path` | 最多 256 点、0.5 Hz、Best-Effort 的显示路径 |
 | 查询 | `map → base_link` | TF2 | 地图中的机器人位姿 |
 | Web 发布 | `/webrobot/cmd_vel` | `geometry_msgs/msg/Twist` | 进入工控机安全看门狗的速度指令 |

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 import re
 import shlex
 import tempfile
@@ -9,6 +10,9 @@ from typing import Any
 
 from app.core.config import RemoteRuntimeSettings
 from app.models.runtime import RuntimeStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteRuntimeError(RuntimeError):
@@ -26,6 +30,7 @@ class RemoteRuntimeManager:
         self._chassis_runtime_source = Path(__file__).resolve().parents[1] / "chassis_runtime.sh"
         self._nav2_source = Path(__file__).resolve().parents[1] / "nav2_web_runtime.py"
         self._telemetry_relay_source = Path(__file__).resolve().parents[1] / "telemetry_relay.py"
+        self._camera_relay_source = Path(__file__).resolve().parents[1] / "camera_relay.py"
         self._arm_bridge_source = Path(__file__).resolve().parents[1] / "arm_tcp_bridge.py"
         self._arm_bridge_deployed = False
 
@@ -123,6 +128,7 @@ class RemoteRuntimeManager:
             (self._watchdog_source, f"{remote_dir}/cmd_vel_watchdog.py"),
             (self._nav2_source, f"{remote_dir}/nav2_web_runtime.py"),
             (self._telemetry_relay_source, f"{remote_dir}/telemetry_relay.py"),
+            (self._camera_relay_source, f"{remote_dir}/camera_relay.py"),
             (self._chassis_runtime_source, f"{remote_dir}/chassis_runtime.sh"),
         ])
         self._arm_bridge_deployed = True
@@ -231,6 +237,27 @@ class RemoteRuntimeManager:
         if task_id not in {task.id for task in self.settings.tasks}:
             raise RemoteRuntimeError(f"unknown runtime task: {task_id}")
 
+    async def _request_frontier_stop(self, current: RuntimeStatus) -> None:
+        """Ask Frontier to release its Nav2 goal before process teardown.
+
+        The stop action must be issued while the exploration node and its
+        control service still exist.  Process-group termination remains the
+        fallback, so a missing service can never prevent a mapping stop.
+        """
+        frontier = next((task for task in current.tasks if task.id == "frontier_exploration"), None)
+        if frontier is None or frontier.state not in {"starting", "running", "stopping"}:
+            return
+        configured = next((task for task in self.settings.tasks if task.id == frontier.id), None)
+        command = configured.on_stop_command.strip() if configured else ""
+        if not command:
+            return
+        try:
+            await self._execute(self._ros_command(command), timeout=12)
+        except RemoteRuntimeError as exc:
+            # Do not abort the all-stop path merely because the exploration
+            # process already exited or its service is briefly unavailable.
+            logger.warning("Frontier stop service request failed; reaping process anyway: %s", exc)
+
     async def task_action(self, task_id: str, action: str) -> RuntimeStatus:
         self._validate_task(task_id)
         if action not in {"start", "stop", "restart"}:
@@ -243,6 +270,8 @@ class RemoteRuntimeManager:
                 task.state in {"starting", "running", "stopping"} for task in current.tasks
             ):
                 raise RemoteRuntimeError("检测到旧版整栈任务，请先点击“全部停止”，再操作独立模块")
+            if action in {"stop", "restart"} and task_id == "frontier_exploration":
+                await self._request_frontier_stop(current)
             await self._deploy_agent()
             command = f"{action}-task"
             arguments = ["--task-id", task_id]
@@ -279,9 +308,10 @@ class RemoteRuntimeManager:
             if profile_id == "manual_mapping":
                 frontier = next((task for task in current.tasks if task.id == "frontier_exploration"), None)
                 if frontier and frontier.state in {"starting", "running", "stopping"}:
+                    await self._request_frontier_stop(current)
                     await self._execute(
                         self._agent_command("stop-task", "--task-id", "frontier_exploration"),
-                        timeout=25,
+                        timeout=35,
                     )
             await self._execute(
                 self._agent_command("start-profile", "--profile", profile_id, "--manifest", self._manifest()),
@@ -294,7 +324,13 @@ class RemoteRuntimeManager:
             current = await self.status()
             if current.legacy_can0_active:
                 raise RemoteRuntimeError("旧版 Web CAN0 管理任务仍在运行；一键全停会将 CAN0 拉低，请先按现场流程退出旧任务")
-            await self._execute(self._agent_command("stop"), timeout=20)
+            # Frontier owns an autonomous Nav2 goal. Stop it first through its
+            # control service, then let the supervisor terminate every module.
+            # The longer timeout covers a slow ROS graph without turning a
+            # normal shutdown into a browser-side timeout.
+            await self._request_frontier_stop(current)
+            await self._deploy_agent()
+            await self._execute(self._agent_command("stop"), timeout=60)
             return await self.status()
 
     async def logs(self, lines: int = 120) -> list[str]:
@@ -319,12 +355,29 @@ class RemoteRuntimeManager:
             directory = self.settings.map_directory
             target = f"{directory}/{name}"
             await self._execute(f"mkdir -p {shlex.quote(directory)}", timeout=12)
-            await self._execute(
-                self._ros_command(
-                    f"timeout 45 ros2 run nav2_map_server map_saver_cli -t /map -f {shlex.quote(target)} --fmt pgm"
-                ),
-                timeout=55,
-            )
+            try:
+                # SLAM Toolbox may publish a changed map less often than Nav2
+                # map_saver_cli's short default wait. Keep the CLI's local
+                # subscription alive long enough to receive the transient map
+                # and make the QoS choice explicit for Humble.
+                await self._execute(
+                    self._ros_command(
+                        "timeout 35 ros2 run nav2_map_server map_saver_cli "
+                        f"-t /map -f {shlex.quote(target)} --fmt pgm "
+                        "--ros-args -p save_map_timeout:=25.0 "
+                        "-p map_subscribe_transient_local:=true"
+                    ),
+                    timeout=45,
+                )
+                await self._execute(
+                    f"test -s {shlex.quote(target)}.yaml && test -s {shlex.quote(target)}.pgm",
+                    timeout=8,
+                )
+            except RemoteRuntimeError as exc:
+                raise RemoteRuntimeError(
+                    "地图保存失败：未能在 25 秒内从工控机 /map 获取完整地图，"
+                    f"或 YAML/PGM 文件未生成（{exc}）"
+                ) from exc
             return await self.list_maps()
 
     async def import_map(self, name: str, yaml_content: bytes, image_content: bytes) -> list[str]:

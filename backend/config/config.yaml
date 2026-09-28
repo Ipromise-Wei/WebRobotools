@@ -32,7 +32,9 @@ ros2:
   # best-effort display topics cross the server/industrial-PC DDS network.
   map_topic: /webrobot/web_map
   map_snapshot_interval_s: 0.2
-  web_map_max_cells: 65536
+  # Preserve a 512 × 512-equivalent display grid so walls remain legible;
+  # this remains a bounded, best-effort display-only payload.
+  web_map_max_cells: 262144
   plan_topic: /webrobot/web_plan
   # 频率和点数上限由工控机中继执行；Web 端仅做很短的防御性限流，
   # 避免再次丢弃已中继的最新显示帧。
@@ -149,7 +151,7 @@ remote_runtime:
       dependencies: [laser_scan]
     - id: telemetry_relay
       label: 工控机实时通信中继
-      command: /usr/bin/python3 /home/hzauaiot/.local/lib/webrobot/telemetry_relay.py --map-topic /map --path-topic /plan --web-map-topic /webrobot/web_map --web-path-topic /webrobot/web_plan --goal-topic /webrobot/navigation/goal --cancel-topic /webrobot/navigation/cancel --status-topic /webrobot/navigation/status --ready-topic /webrobot/navigation/ready --web-active-topic /webrobot/navigation/active --navigate-action /navigate_to_pose --map-interval 1.0 --path-interval 0.5 --max-map-cells 65536 --max-path-points 256 --web-lease-timeout 10
+      command: /usr/bin/python3 /home/hzauaiot/.local/lib/webrobot/telemetry_relay.py --map-topic /map --path-topic /plan --web-map-topic /webrobot/web_map --web-path-topic /webrobot/web_plan --goal-topic /webrobot/navigation/goal --cancel-topic /webrobot/navigation/cancel --status-topic /webrobot/navigation/status --ready-topic /webrobot/navigation/ready --web-active-topic /webrobot/navigation/active --navigate-action /navigate_to_pose --map-interval 0.5 --path-interval 0.5 --max-map-cells 262144 --max-path-points 256 --web-lease-timeout 10
       startup_delay: 1
       dependencies: [chassis, slam]
     - id: navigation
@@ -163,8 +165,11 @@ remote_runtime:
       startup_delay: 5
       ready_command: ros2 service list | grep -qx /control_exploration
       ready_timeout: 30
-      on_start_command: ros2 run frontier_exploration_ros2 frontier_exploration_ctl start -t 15
-      on_stop_command: ros2 run frontier_exploration_ros2 frontier_exploration_ctl stop -t 8 -q
+      # Use the package's documented control commands.  The runtime agent
+      # applies a separate command timeout, so unsupported CLI flags cannot
+      # prevent a Frontier stop request from reaching the control service.
+      on_start_command: timeout 15 ros2 run frontier_exploration_ros2 frontier_exploration_ctl start
+      on_stop_command: timeout 8 ros2 run frontier_exploration_ros2 frontier_exploration_ctl stop
       include_in_start_all: false
       dependencies: [navigation]
   profiles:

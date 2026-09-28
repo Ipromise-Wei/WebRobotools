@@ -127,7 +127,6 @@ def test_map_manager_reuses_immutable_grid_snapshot() -> None:
 
     asyncio.run(scenario())
 
-
 def test_map_transport_encodes_signed_cells_as_compressed_bytes() -> None:
     payload = encode_map_grid(MapSnapshot(width=3, height=1, data=[-1, 0, 100]))
     compressed = base64.b64decode(payload["data"])

@@ -86,13 +86,13 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 - **手动建图**：按依赖顺序启动底盘、雷达、FAST-LIO、点云转激光、SLAM Toolbox 和 Nav2；操作者使用页面中的虚拟摇杆或键盘驾驶机器人完成建图。
 - **自动建图**：在上述模块就绪后启动 `frontier_exploration_ros2`，并通过其控制服务显式开始 Frontier 探索。切换回手动建图或点击“停止建图”时，系统先请求 Frontier 停止，再回收本次建图的进程。
 
-两种方案都会先启动“工控机实时通信中继”，再启动 Nav2。升级到新版本后请先停止当前建图任务、等待全部模块停止，再重新启动方案，以便把中继和速度看门狗的新脚本部署到工控机。
+两种方案都会先启动“工控机实时通信中继”，再启动 Nav2。中继向 Web 发布最多 262,144 栅格、每秒最多两次的显示地图，墙体和扫描边界在全屏视图中仍清晰可辨。升级到新版本后请先停止当前建图任务、等待全部模块停止，再重新启动方案，以便把中继和速度看门狗的新脚本部署到工控机。
 
 自动建图需要工控机已构建 `/home/hzauaiot/songwei/frontier_ws`，并具备 `frontier_exploration_ros2` 和 `nav2_map_server`。开始自动探索前，必须清空作业区域、确认现场物理急停有效，并全程安排现场人员监控。Web 停止、Frontier 停止和速度看门狗均不替代硬件急停。
 
 ### 保存与导入地图
 
-“保存当前地图”调用工控机 `nav2_map_server map_saver_cli`，将正在发布的 `/map` 保存为标准 ROS 地图 YAML 与 PGM 文件。导入时须同时选择同一张地图的 `.yaml` 与 `.pgm` 文件；Web 会校验基本格式后保存到工控机：
+“保存当前地图”调用工控机 `nav2_map_server map_saver_cli`，以 transient-local QoS 等待正在发布的 `/map` 最多 25 秒，再保存为标准 ROS 地图 YAML 与 PGM 文件；保存后会确认这两个文件均已生成。导入时须同时选择同一张地图的 `.yaml` 与 `.pgm` 文件；Web 会校验基本格式后保存到工控机：
 
 ```text
 /home/hzauaiot/.local/share/webrobot/maps
@@ -100,7 +100,7 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 
 导入地图仅加入地图文件库，不会中断 SLAM，也不会自动切换到静态地图定位；使用已保存地图进行 AMCL/定位导航属于单独的运行模式。
 
-这些模块开关常驻移动底盘页面右侧控制栏。运动区可在虚拟摇杆和键盘模式之间切换：摇杆按住拖动可同时控制线速度和角速度；键盘模式可按住方向键或 `W/A/S/D` 持续驾驶，并可组合前进与转弯。松键、松开摇杆、页面失焦或触控中断即停车；控制区的空格键可请求停止运动或取消导航，但不能替代现场硬件急停。地图窗口支持鼠标拖拽、滚轮缩放、双击跟随机器人、视图复位、全屏显示、图层显隐以及地图坐标查看。
+这些模块开关常驻移动底盘页面右侧控制栏。运动区可在虚拟摇杆和键盘模式之间切换：摇杆按住拖动可同时控制线速度和角速度；键盘模式可按住方向键或 `W/A/S/D` 持续驾驶，并可组合前进与转弯。松键、松开摇杆、页面失焦或触控中断即停车；控制区的空格键可请求停止运动或取消导航，但不能替代现场硬件急停。自动建图停止会先向 Frontier 控制服务发送标准 `frontier_exploration_ctl stop`，再停止进程组；即使控制服务无响应，进程回收仍会继续。地图窗口支持鼠标拖拽、滚轮缩放、双击跟随机器人、视图复位、全屏显示、图层显隐以及地图坐标查看。
 
 远程控制要求 Web 服务器已经配置到工控机的免密 SSH 登录。运行接口只接受启动、停止、重启和日志查询，不接受来自浏览器的任意 Shell 命令。手动实车速度首先发布到 `/webrobot/cmd_vel`，再由工控机侧看门狗转发至 `/cmd_vel`；命令超过 0.5 秒未更新时，看门狗会持续向底盘发送零速度。导航目标则由工控机本地中继提交给 Nav2，Nav2 的本地速度同样在 0.5 秒无更新时归零；Web 服务的请求关联控制租约只在持续 10 秒失联后请求取消无人监管的目标，不会因瞬时视频或地图网络抖动造成走停。
 
@@ -119,7 +119,7 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 - 机械臂停止与夹爪 IO 释放的组合停止操作；
 - 末端相机画面入口，视频流地址沿用 `visualization.camera_stream_url`。
 
-`visualization.realsense.enabled` 默认启用。当前配置由工控机使用 FFmpeg 从 D435 彩色节点 `/dev/video4` 采集 `1280×720@12fps`、JPEG 质量 70 的低延迟预览，经过 SSH 视频管道传到 Web 后端，再由 `/api/visualization/camera/stream` 输出共享 MJPEG；机械臂页和底盘页复用同一视频源。采集和服务端转发均只保留最新帧，超过 800 KB 的显示帧会丢弃。该接口不生成模拟帧。若把 `source` 改为 `local`，则改用 Web 服务器本机的 `pyrealsense2` 采集。安装本机采集依赖后需要重新执行：
+`visualization.realsense.enabled` 默认启用。当前配置由工控机使用 FFmpeg 从 D435 彩色节点 `/dev/video4` 采集 `1280×720@12fps`、JPEG 质量 70 的低延迟预览。工控机只保留最新 JPEG，Web 后端通过 SSH 按需取帧，再由 `/api/visualization/camera/stream` 输出共享 MJPEG；因此不会把旧帧连续排队到浏览器。机械臂页和底盘页复用同一视频源，超过 800 KB 的显示帧会丢弃。该接口不生成模拟帧。若把 `source` 改为 `local`，则改用 Web 服务器本机的 `pyrealsense2` 采集。安装本机采集依赖后需要重新执行：
 
 ```bash
 ./scripts/setup_ros2_backend.sh
@@ -146,4 +146,4 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv-ros2/bin/pytest
 
 系统边界及接口约定见 [docs/architecture.md](docs/architecture.md) 和 [docs/api.md](docs/api.md)。
 
-每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.7.0 版本说明](docs/releases/v0.7.0.md)。
+每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.7.1 版本说明](docs/releases/v0.7.1.md)。

@@ -12,7 +12,12 @@ const status = ref<RuntimeStatus | null>(null)
 
 const taskState = (id: string) => status.value?.tasks.find((task) => task.id === id)?.state
 const automaticRunning = computed(() => ['starting', 'running'].includes(taskState('frontier_exploration') || ''))
-const mappingRunning = computed(() => ['starting', 'running'].includes(taskState('slam') || ''))
+const mappingTaskIds = ['chassis', 'lidar', 'localization', 'laser_scan', 'slam', 'telemetry_relay', 'navigation', 'frontier_exploration']
+const activeTaskState = (state: string | undefined) => ['starting', 'running', 'stopping'].includes(state || '')
+// Stopping must remain available while the profile is still bringing up SLAM
+// or Frontier. The old UI only enabled it after SLAM reached running, leaving
+// no Web stop path during part of automatic-mapping startup.
+const mappingRunning = computed(() => mappingTaskIds.some((id) => activeTaskState(taskState(id))))
 const actionError = (reason: unknown) => axios.isAxiosError(reason)
   ? String(reason.response?.data?.detail || reason.message)
   : String(reason)

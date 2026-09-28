@@ -37,11 +37,13 @@ class ROS2Settings(BaseModel):
     # These are bounded display topics emitted by the industrial-PC relay.
     # The raw SLAM /map and /plan never cross the Web-server DDS connection.
     map_topic: str = "/webrobot/web_map"
-    # The IPC relay owns the 1 Hz map cap; this short local guard only protects
+    # The IPC relay owns the 2 Hz map cap; this short local guard only protects
     # against a misconfigured relay without needlessly dropping its latest UI
     # frame a second time.
     map_snapshot_interval_s: float = Field(default=0.2, ge=0.2, le=10.0)
-    web_map_max_cells: int = Field(default=65_536, ge=4_096, le=1_048_576)
+    # 512 × 512 preserves thin walls and scan detail on a full-screen map
+    # while still being a bounded display-only payload.
+    web_map_max_cells: int = Field(default=262_144, ge=4_096, le=1_048_576)
     plan_topic: str = "/webrobot/web_plan"
     # Nav2 can publish long global plans many times per second. The IPC relay
     # owns the 0.5 Hz cap; this is only a local defensive guard.

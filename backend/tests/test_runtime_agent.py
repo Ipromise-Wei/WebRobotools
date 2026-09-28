@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -53,3 +54,32 @@ def test_runtime_agent_starts_and_reaps_process_group() -> None:
             stopped = call_agent(state_dir, "stop")
         assert stopped["phase"] == "stopped"
         assert stopped["supervisor_pid"] is None
+
+
+def test_runtime_agent_runs_stop_hook_before_reaping_frontier_process() -> None:
+    with tempfile.TemporaryDirectory() as state_dir:
+        marker = Path(state_dir) / "frontier-stop-requested"
+        manifest = {
+            "domain_id": 30,
+            "environment_setup": [],
+            "tasks": [{
+                "id": "frontier_exploration", "label": "Frontier", "command": "sleep 30",
+                "startup_delay": 0.1, "ready_command": "", "ready_timeout": 0,
+                "on_stop_command": f"printf stopped > {shlex.quote(str(marker))}",
+            }],
+        }
+        encoded = base64.urlsafe_b64encode(json.dumps(manifest).encode()).decode()
+        started = call_agent(
+            state_dir, "start-task", "--task-id", "frontier_exploration", "--manifest", encoded,
+        )
+        try:
+            deadline = time.monotonic() + 3
+            while started["phase"] == "starting" and time.monotonic() < deadline:
+                time.sleep(0.1)
+                started = call_agent(state_dir, "status")
+            assert started["phase"] == "running"
+            stopped = call_agent(state_dir, "stop-task", "--task-id", "frontier_exploration")
+            assert stopped["phase"] == "stopped"
+            assert marker.read_text(encoding="utf-8") == "stopped"
+        finally:
+            call_agent(state_dir, "stop")

@@ -3,8 +3,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.core.config import RemoteRuntimeSettings
+from app.core.config import RemoteRuntimeSettings, RuntimeTaskSettings
 from app.core.remote_runtime import RemoteRuntimeError, RemoteRuntimeManager
+from app.models.runtime import RuntimeStatus, RuntimeTaskState
 
 
 class TimedOutProcess:
@@ -49,3 +50,77 @@ async def _run_timeout_scenario() -> None:
 
 def test_ssh_timeout_becomes_runtime_error() -> None:
     asyncio.run(_run_timeout_scenario())
+
+
+def test_map_save_waits_for_slam_and_verifies_both_artifacts() -> None:
+    async def scenario() -> None:
+        settings = RemoteRuntimeSettings(
+            enabled=True,
+            host="robot.example",
+            user="robot",
+            map_directory="/robot/maps",
+            tasks=[RuntimeTaskSettings(id="slam", label="SLAM", command="slam")],
+        )
+        manager = RemoteRuntimeManager(settings)
+        status = RuntimeStatus(
+            enabled=True,
+            reachable=True,
+            phase="running",
+            tasks=[RuntimeTaskState(id="slam", label="SLAM", state="running")],
+        )
+        commands: list[tuple[str, float]] = []
+
+        async def fake_status() -> RuntimeStatus:
+            return status
+
+        async def fake_execute(command: str, timeout: float = 15) -> str:
+            commands.append((command, timeout))
+            return "demo.yaml\n" if command.startswith("mkdir -p /robot/maps && find") else ""
+
+        manager.status = fake_status  # type: ignore[method-assign]
+        manager._execute = fake_execute  # type: ignore[method-assign]
+
+        assert await manager.save_map("demo") == ["demo"]
+        save_command = next(command for command, _ in commands if "map_saver_cli" in command)
+        assert "save_map_timeout:=25.0" in save_command
+        assert "map_subscribe_transient_local:=true" in save_command
+        assert any("test -s /robot/maps/demo.yaml" in command for command, _ in commands)
+
+    asyncio.run(scenario())
+
+
+def test_frontier_stop_uses_the_configured_standard_control_command() -> None:
+    async def scenario() -> None:
+        settings = RemoteRuntimeSettings(
+            enabled=True,
+            host="robot.example",
+            user="robot",
+            tasks=[
+                RuntimeTaskSettings(
+                    id="frontier_exploration",
+                    label="Frontier",
+                    command="frontier",
+                    on_stop_command="timeout 8 ros2 run frontier_exploration_ros2 frontier_exploration_ctl stop",
+                )
+            ],
+        )
+        manager = RemoteRuntimeManager(settings)
+        current = RuntimeStatus(
+            enabled=True,
+            reachable=True,
+            phase="running",
+            tasks=[RuntimeTaskState(id="frontier_exploration", label="Frontier", state="running")],
+        )
+        commands: list[tuple[str, float]] = []
+
+        async def fake_execute(command: str, timeout: float = 15) -> str:
+            commands.append((command, timeout))
+            return ""
+
+        manager._execute = fake_execute  # type: ignore[method-assign]
+        await manager._request_frontier_stop(current)
+
+        assert commands and "frontier_exploration_ctl stop" in commands[0][0]
+        assert commands[0][1] == 12
+
+    asyncio.run(scenario())

@@ -39,7 +39,7 @@ Web 运行面板 ──► Runtime API ──► RemoteRuntimeManager ──SSH�
 机械臂连接按钮 ──REST──► RobotManager ──► RealManArmController ──SSH stdio──► 工控机桥接器
                                           └► RealManGripperController          └─ enp4s0 ─► RML63 192.168.1.20:8080 / 工具 IO
 
-工控机 RealSense ──V4L2/FFmpeg──► SSH JPEG 管道 ──► Web 单实例帧缓存 ──MJPEG──► 底盘页 / 机械臂页
+工控机 RealSense ──V4L2/FFmpeg──► 工控机最新帧中继 ──SSH 按需取帧──► Web 单实例帧缓存 ──MJPEG──► 底盘页 / 机械臂页
 
 地图选点/朝向 ──小型 JSON──► 工控机实时通信中继 ──本机 NavigateToPose Action──► Nav2 速度平滑器 ──/webrobot/nav_cmd_vel──► 工控机速度看门狗 ──► /cmd_vel
 Web 请求关联租约 ──► 中继（10 秒失联后请求取消；不参与速度循环）

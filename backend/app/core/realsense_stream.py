@@ -10,8 +10,10 @@ import asyncio
 from datetime import datetime, timezone
 from io import BytesIO
 import os
+from pathlib import Path
 import select
 import shlex
+import struct
 import subprocess
 import threading
 import time
@@ -208,40 +210,32 @@ class RealSenseStream:
         ):
             raise RuntimeError("工控机 SSH 连接未配置")
 
-        # D435 exposes its RGB sensor as a standard V4L2 node. Encoding on the
-        # industrial PC keeps raw YUYV traffic off the LAN; stdout contains only
-        # concatenated JPEG frames and is never exposed as a shell endpoint.
-        quality = max(2, min(31, round((100 - self.settings.jpeg_quality) / 4) + 2))
-        ffmpeg = [
-            "/usr/bin/ffmpeg",
-            "-hide_banner",
-            "-loglevel", "error",
-            "-nostdin",
-            "-fflags", "nobuffer",
-            "-flags", "low_delay",
-            # Do not let FFmpeg queue old camera buffers while the server or
-            # network is briefly busy. A monitoring UI should show the newest
-            # image, never replay a backlog.
-            "-thread_queue_size", "1",
-            "-f", "v4l2",
-            "-input_format", self.settings.input_format,
-            "-video_size", f"{self.settings.width}x{self.settings.height}",
-            "-framerate", str(self.settings.fps),
-            "-i", self.settings.video_device,
-            "-an",
-            "-c:v", "mjpeg",
-            "-q:v", str(quality),
-            "-f", "image2pipe",
-            "-flush_packets", "1",
-            "pipe:1",
+        # The helper retains the newest local FFmpeg frame, but it writes one
+        # response only after this worker requests it. Unlike a continuous
+        # MJPEG pipe, TCP therefore cannot queue a backlog of obsolete frames.
+        relay_path = str(Path(remote.agent_path).parent / "camera_relay.py")
+        relay = [
+            "/usr/bin/python3", relay_path,
+            "--video-device", self.settings.video_device,
+            "--input-format", self.settings.input_format,
+            "--width", str(self.settings.width),
+            "--height", str(self.settings.height),
+            "--fps", str(self.settings.fps),
+            "--jpeg-quality", str(self.settings.jpeg_quality),
+            "--max-frame-bytes", str(self.settings.max_frame_bytes),
         ]
-        remote_command = " ".join(shlex.quote(argument) for argument in ffmpeg)
+        remote_command = " ".join(shlex.quote(argument) for argument in relay)
         command = [
             "ssh",
             "-T",
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", f"ConnectTimeout={int(remote.connect_timeout)}",
+            # Small preview frames are latency-sensitive.  Explicitly avoid
+            # SSH compression work and request low-delay IP classification;
+            # the JPEG stream is already compressed.
+            "-o", "Compression=no",
+            "-o", "IPQoS=lowdelay",
             "-o", "ServerAliveInterval=5",
             "-o", "ServerAliveCountMax=2",
             "-p", str(remote.port),
@@ -250,52 +244,39 @@ class RealSenseStream:
         ]
         process = subprocess.Popen(
             command,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
         )
-        if process.stdout is None:
+        if process.stdin is None or process.stdout is None:
             process.terminate()
             raise RuntimeError("无法创建工控机视频通道")
 
-        buffer = bytearray()
+        output_fd = process.stdout.fileno()
         label = self.settings.serial.strip() or f"{remote.host}:{self.settings.video_device}"
         try:
+            empty_since: float | None = None
             while not self._stop.is_set():
-                ready, _, _ = select.select([process.stdout], [], [], 1.0)
-                if not ready:
-                    if process.poll() is not None:
-                        break
+                process.stdin.write(b"N")
+                process.stdin.flush()
+                header = self._read_remote_bytes(process, output_fd, 4)
+                frame_size = struct.unpack("!I", header)[0]
+                if frame_size == 0:
+                    # The helper has not received its first camera frame yet.
+                    # Avoid a hot retry loop while retaining a live connection.
+                    empty_since = empty_since or time.monotonic()
+                    if time.monotonic() - empty_since > 5.0:
+                        raise RuntimeError("工控机最新帧中继 5 秒未收到相机画面")
+                    self._stop.wait(0.05)
                     continue
-                chunk = os.read(process.stdout.fileno(), 65536)
-                if not chunk:
-                    break
-                buffer.extend(chunk)
-                latest: bytes | None = None
-                while True:
-                    start = buffer.find(b"\xff\xd8")
-                    if start < 0:
-                        if len(buffer) > 1:
-                            del buffer[:-1]
-                        break
-                    end = buffer.find(b"\xff\xd9", start + 2)
-                    if end < 0:
-                        if start:
-                            del buffer[:start]
-                        if len(buffer) > 16 * 1024 * 1024:
-                            raise RuntimeError("工控机视频帧超过大小限制")
-                        break
-                    jpeg = bytes(buffer[start:end + 2])
-                    del buffer[:end + 2]
-                    if len(jpeg) <= self.settings.max_frame_bytes:
-                        # If multiple complete images accumulated in one read,
-                        # emit only the newest one. Sending stale frames first
-                        # produces visible latency and needlessly competes with
-                        # navigation traffic on the SSH/TCP connection.
-                        latest = jpeg
-                if latest is not None:
-                    self._publish(latest, label)
+                empty_since = None
+                if frame_size > self.settings.max_frame_bytes:
+                    raise RuntimeError("工控机返回的视频帧超过大小限制")
+                jpeg = self._read_remote_bytes(process, output_fd, frame_size)
+                if not jpeg.startswith(b"\xff\xd8") or not jpeg.endswith(b"\xff\xd9"):
+                    raise RuntimeError("工控机返回的不是完整 JPEG 帧")
+                self._publish(jpeg, label)
 
             if not self._stop.is_set():
                 try:
@@ -307,16 +288,43 @@ class RealSenseStream:
                     detail = process.stderr.read(8192).decode(errors="replace").strip()
                 raise RuntimeError(detail or "工控机 RealSense 视频通道已断开")
         finally:
+            if process.stdin is not None and not process.stdin.closed:
+                process.stdin.close()
             if process.poll() is None:
-                process.terminate()
                 try:
-                    process.wait(timeout=2.0)
+                    # EOF is the normal shutdown signal for the private
+                    # request/response protocol and lets the IPC helper reap
+                    # its own FFmpeg child before we escalate.
+                    process.wait(timeout=0.5)
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=1.0)
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=1.0)
             for stream in (process.stdout, process.stderr):
                 if stream is not None and not stream.closed:
                     stream.close()
+
+    def _read_remote_bytes(
+        self, process: subprocess.Popen[bytes], output_fd: int, size: int
+    ) -> bytes:
+        """Read one demand-response field without blocking shutdown forever."""
+        data = bytearray()
+        while len(data) < size:
+            ready, _, _ = select.select([output_fd], [], [], 0.5)
+            if not ready:
+                if self._stop.is_set():
+                    raise RuntimeError("视频流已停止")
+                if process.poll() is not None:
+                    raise RuntimeError("工控机最新帧服务已断开")
+                continue
+            chunk = os.read(output_fd, size - len(data))
+            if not chunk:
+                raise RuntimeError("工控机最新帧服务已断开")
+            data.extend(chunk)
+        return bytes(data)
 
     def wait_for_frame(self, after: int, timeout: float = 2.0) -> tuple[int, bytes] | None:
         deadline = time.monotonic() + timeout

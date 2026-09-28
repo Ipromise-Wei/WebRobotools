@@ -51,7 +51,14 @@ async def camera_stream(request: Request) -> StreamingResponse:
     return StreamingResponse(
         stream.mjpeg(),
         media_type="multipart/x-mixed-replace; boundary=frame",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            # Disable reverse-proxy buffering; a monitoring stream must show
+            # the newest frame instead of a buffered multipart response.
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
