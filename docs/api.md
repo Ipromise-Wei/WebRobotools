@@ -35,9 +35,9 @@
 | GET | `/api/runtime/status` | 工控机连通性和各运行任务状态 |
 | POST | `/api/runtime/start` | 按依赖顺序在后台启动全部受管任务 |
 | POST | `/api/runtime/stop` | 停止全部受管任务及其子进程 |
-| POST | `/api/runtime/mapping/manual/start` | 停止旧受管进程并从空白地图启动手动建图 |
-| POST | `/api/runtime/mapping/automatic/start` | 停止旧受管进程并从空白地图启动 Frontier 自动建图 |
-| POST | `/api/runtime/mapping/stop` | 停止建图整栈并清除 Web 地图/路径状态 |
+| POST | `/api/runtime/mapping/manual/start` | 重启建图会话并从空白地图启动手动建图 |
+| POST | `/api/runtime/mapping/automatic/start` | 重启建图会话并从空白地图启动 Frontier 自动建图 |
+| POST | `/api/runtime/mapping/stop` | 只停止 Frontier、Nav2、地图中继与 SLAM，保留底盘和传感器管线 |
 | POST | `/api/runtime/tasks/{task_id}/start` | 独立启动指定模块 |
 | POST | `/api/runtime/tasks/{task_id}/stop` | 独立停止指定模块 |
 | POST | `/api/runtime/tasks/{task_id}/restart` | 独立重启指定模块 |

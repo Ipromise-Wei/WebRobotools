@@ -83,12 +83,12 @@ ROS_DOMAIN_ID=30 ./scripts/start_system.sh
 
 底盘页面的“建图管理”卡提供两种受管方案：
 
-- **手动建图**：先回收当前 Web 受管进程，再按依赖顺序启动底盘、雷达、FAST-LIO、点云转激光、SLAM Toolbox 和 Nav2；操作者使用页面中的虚拟摇杆或键盘驾驶机器人完成建图。
-- **自动建图**：先回收当前 Web 受管进程，在全新 SLAM 会话中启动 `frontier_exploration_ros2`，并通过其控制服务显式开始 Frontier 探索。点击“停止建图”时，系统先请求 Frontier 停止，再回收本次建图的进程。
+- **手动建图**：保留已运行的底盘、雷达、FAST-LIO 和点云转激光，重建 SLAM Toolbox、地图中继和 Nav2 会话；操作者使用页面中的虚拟摇杆或键盘驾驶机器人完成建图。
+- **自动建图**：保留基础 I/O 进程，在全新 SLAM 会话中启动 `frontier_exploration_ros2`，并通过其控制服务显式开始 Frontier 探索。点击“停止建图”时，系统只关闭 Frontier、Nav2、地图/导航中继和 SLAM。
 
-从一种建图模式切换到另一种时，工控机上旧的 SLAM Toolbox 进程会先退出，Web 地图/路径缓存也会清除，新进程从空白实时地图开始。“清显示缓存”只用于清除浏览器/Web 服务的当前副本；只要 SLAM 还在运行，它就会再次发布地图。
+从一种建图模式切换到另一种时，工控机上旧的 SLAM Toolbox 进程会先退出，Web 地图/路径缓存也会清除，新进程从空白实时地图开始；底盘与传感器管线不重启。“清显示缓存”只用于清除浏览器/Web 服务的当前副本；只要 SLAM 还在运行，它就会再次发布地图。
 
-两种方案都会先启动“工控机实时通信中继”，再启动 Nav2。中继向 Web 发布最多 262,144 栅格、每秒最多两次的显示地图，墙体和扫描边界在全屏视图中仍清晰可辨。升级到新版本后请先停止当前建图任务、等待全部模块停止，再重新启动方案，以便把中继和速度看门狗的新脚本部署到工控机。
+两种方案都会先启动“工控机实时通信中继”，再启动 Nav2。中继向 Web 发布最多 262,144 栅格、每秒最多两次的显示地图，墙体和扫描边界在全屏视图中仍清晰可辨。升级到新版本时应先使用“全部停止”回收旧进程，重启 Web 服务后再选择建图方案，以便把新运行代理与中继脚本部署到工控机。
 
 自动建图需要工控机已构建 `/home/hzauaiot/songwei/frontier_ws`，并具备 `frontier_exploration_ros2` 和 `nav2_map_server`。开始自动探索前，必须清空作业区域、确认现场物理急停有效，并全程安排现场人员监控。Web 停止、Frontier 停止和速度看门狗均不替代硬件急停。
 
@@ -142,4 +142,4 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv-ros2/bin/pytest
 
 系统边界及接口约定见 [docs/architecture.md](docs/architecture.md) 和 [docs/api.md](docs/api.md)。
 
-每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.7.4 版本说明](docs/releases/v0.7.4.md)。
+每个发布版本都必须同时提交改进日志：简要变化记录在 [CHANGELOG.md](CHANGELOG.md)，完整说明、验证结果与已知边界记录在 [版本日志索引](docs/releases/README.md)。当前优化版本见 [v0.7.5 版本说明](docs/releases/v0.7.5.md)。

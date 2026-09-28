@@ -501,7 +501,7 @@ def stop_task(task_id: str, enforce_dependents: bool = True) -> dict[str, Any]:
     )
 
 
-def stop_all() -> dict[str, Any]:
+def cancel_orchestrator() -> dict[str, Any]:
     state = normalise_state()
     orchestrator = state.get("orchestrator_pid")
     orchestrator_start = state.get("orchestrator_start")
@@ -514,6 +514,26 @@ def stop_all() -> dict[str, Any]:
             os.kill(orchestrator, signal.SIGKILL)
         update_runtime(orchestrator_pid=None, orchestrator_start=None)
         state = normalise_state()
+    return state
+
+
+def stop_tasks(task_ids: list[str]) -> dict[str, Any]:
+    state = cancel_orchestrator()
+    configured_ids = {task["id"] for task in state.get("tasks", [])}
+    unknown = [task_id for task_id in task_ids if task_id not in configured_ids]
+    if unknown:
+        raise ValueError("未知模块：" + "、".join(unknown))
+    requested = set(task_ids)
+    # Reverse manifest order naturally tears down dependants before their
+    # providers (Frontier -> Nav2 -> relay -> SLAM for the mapping session).
+    for task in reversed(state.get("tasks", [])):
+        if task["id"] in requested:
+            stop_task(task["id"], enforce_dependents=False)
+    return normalise_state()
+
+
+def stop_all() -> dict[str, Any]:
+    state = cancel_orchestrator()
     for task in reversed(state.get("tasks", [])):
         stop_task(task["id"], enforce_dependents=False)
     return normalise_state()
@@ -528,6 +548,8 @@ def main() -> int:
         command.add_argument("--manifest", required=True)
     stop_parser = commands.add_parser("stop-task")
     stop_parser.add_argument("--task-id", required=True)
+    stop_tasks_parser = commands.add_parser("stop-tasks")
+    stop_tasks_parser.add_argument("--task-ids", required=True)
     supervisor = commands.add_parser("supervise-task")
     supervisor.add_argument("--task-id", required=True)
     supervisor.add_argument("--manifest-file", required=True)
@@ -568,6 +590,8 @@ def main() -> int:
         result = start_profile(decode_manifest(args.manifest), args.profile)
     elif args.action == "stop-task":
         result = stop_task(args.task_id)
+    elif args.action == "stop-tasks":
+        result = stop_tasks([item for item in args.task_ids.split(",") if item])
     else:
         manifest = decode_manifest(args.manifest)
         if args.action == "restart-task":

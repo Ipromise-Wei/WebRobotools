@@ -126,7 +126,7 @@ def test_frontier_stop_uses_the_configured_standard_control_command() -> None:
     asyncio.run(scenario())
 
 
-def test_mapping_profile_restart_stops_the_stack_before_starting_fresh() -> None:
+def test_mapping_profile_restart_stops_only_session_before_starting_fresh() -> None:
     async def scenario() -> None:
         settings = RemoteRuntimeSettings(
             enabled=True,
@@ -169,16 +169,17 @@ def test_mapping_profile_restart_stops_the_stack_before_starting_fresh() -> None
         manager._execute = fake_execute  # type: ignore[method-assign]
 
         assert await manager.restart_profile("automatic_mapping") is current
-        stop_index = next(
+        selective_stop_index = next(
             index for index, (command, _) in enumerate(commands)
-            if " stop" in command and "frontier_exploration_ctl" not in command
+            if "stop-tasks" in command
         )
         start_index = next(
             index for index, (command, _) in enumerate(commands)
             if "start-profile" in command
         )
         assert "frontier_exploration_ctl stop" in commands[0][0]
-        assert commands[stop_index][1] == 60
-        assert stop_index < start_index
+        assert "slam,telemetry_relay,navigation,frontier_exploration" in commands[selective_stop_index][0]
+        assert commands[selective_stop_index][1] == 60
+        assert selective_stop_index < start_index
 
     asyncio.run(scenario())

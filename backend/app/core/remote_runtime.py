@@ -22,6 +22,10 @@ class RemoteRuntimeError(RuntimeError):
 class RemoteRuntimeManager:
     """Controls one allow-listed robot runtime over an SSH transport."""
 
+    mapping_session_task_ids = (
+        "slam", "telemetry_relay", "navigation", "frontier_exploration",
+    )
+
     def __init__(self, settings: RemoteRuntimeSettings) -> None:
         self.settings = settings
         self._lock = asyncio.Lock()
@@ -323,9 +327,10 @@ class RemoteRuntimeManager:
         """Start a mapping profile with a fresh in-memory SLAM session.
 
         Humble deployments cannot consistently reset a running SLAM Toolbox
-        map through a service.  Reaping the complete Web-managed stack first
-        also prevents manual and Frontier sessions from sharing publishers,
-        navigation goals, or the previous process' map state.
+        map through a service. Reaping the mapping session first prevents
+        manual and Frontier sessions from sharing publishers, navigation
+        goals, or the previous process' map state while preserving the base
+        chassis, LiDAR, FAST-LIO and point-cloud pipeline.
         """
         if profile_id not in {profile.id for profile in self.settings.profiles}:
             raise RemoteRuntimeError(f"unknown runtime profile: {profile_id}")
@@ -335,13 +340,36 @@ class RemoteRuntimeManager:
                 raise RemoteRuntimeError(current.message)
             await self._request_frontier_stop(current)
             await self._deploy_agent()
-            await self._execute(self._agent_command("stop"), timeout=60)
+            await self._execute(
+                self._agent_command(
+                    "stop-tasks", "--task-ids",
+                    ",".join(self.mapping_session_task_ids),
+                ),
+                timeout=60,
+            )
             await self._execute(
                 self._agent_command(
                     "start-profile", "--profile", profile_id,
                     "--manifest", self._manifest(),
                 ),
                 timeout=25,
+            )
+            return await self.status()
+
+    async def stop_mapping(self) -> RuntimeStatus:
+        """Stop only the live mapping/navigation session and keep base I/O."""
+        async with self._lock:
+            current = await self.status()
+            if current.legacy_can0_active:
+                raise RemoteRuntimeError(current.message)
+            await self._request_frontier_stop(current)
+            await self._deploy_agent()
+            await self._execute(
+                self._agent_command(
+                    "stop-tasks", "--task-ids",
+                    ",".join(self.mapping_session_task_ids),
+                ),
+                timeout=60,
             )
             return await self.status()
 

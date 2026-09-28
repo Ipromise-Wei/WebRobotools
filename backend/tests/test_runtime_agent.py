@@ -83,3 +83,41 @@ def test_runtime_agent_runs_stop_hook_before_reaping_frontier_process() -> None:
             assert marker.read_text(encoding="utf-8") == "stopped"
         finally:
             call_agent(state_dir, "stop")
+
+
+def test_runtime_agent_stops_only_requested_mapping_tasks() -> None:
+    manifest = {
+        "domain_id": 30,
+        "environment_setup": [],
+        "tasks": [
+            {
+                "id": "chassis", "label": "Chassis", "command": "sleep 30",
+                "startup_delay": 0.1, "ready_command": "", "ready_timeout": 0,
+            },
+            {
+                "id": "slam", "label": "SLAM", "command": "sleep 30",
+                "startup_delay": 0.1, "ready_command": "", "ready_timeout": 0,
+            },
+        ],
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(manifest).encode()).decode()
+    with tempfile.TemporaryDirectory() as state_dir:
+        for task_id in ("chassis", "slam"):
+            call_agent(
+                state_dir, "start-task", "--task-id", task_id,
+                "--manifest", encoded,
+            )
+        try:
+            deadline = time.monotonic() + 3
+            status = call_agent(state_dir, "status")
+            while status["phase"] == "starting" and time.monotonic() < deadline:
+                time.sleep(0.1)
+                status = call_agent(state_dir, "status")
+            stopped = call_agent(
+                state_dir, "stop-tasks", "--task-ids", "slam",
+            )
+            tasks = {task["id"]: task for task in stopped["tasks"]}  # type: ignore[index]
+            assert tasks["chassis"]["state"] == "running"
+            assert tasks["slam"]["state"] == "stopped"
+        finally:
+            call_agent(state_dir, "stop")

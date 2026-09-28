@@ -147,7 +147,7 @@ async def stop_mapping(
     runtime: Annotated[RemoteRuntimeManager, Depends(get_remote_runtime)],
 ) -> RuntimeActionResponse:
     try:
-        result = await runtime.stop()
+        result = await runtime.stop_mapping()
         await clear_live_map_cache(request)
     except RemoteRuntimeError as exc:
         raise failure(exc) from exc

@@ -9,7 +9,7 @@ const status = ref<RuntimeStatus | null>(null)
 
 const taskState = (id: string) => status.value?.tasks.find((task) => task.id === id)?.state
 const automaticRunning = computed(() => ['starting', 'running'].includes(taskState('frontier_exploration') || ''))
-const mappingTaskIds = ['chassis', 'lidar', 'localization', 'laser_scan', 'slam', 'telemetry_relay', 'navigation', 'frontier_exploration']
+const mappingTaskIds = ['slam', 'telemetry_relay', 'navigation', 'frontier_exploration']
 const activeTaskState = (state: string | undefined) => ['starting', 'running', 'stopping'].includes(state || '')
 // Stopping must remain available while the profile is still bringing up SLAM
 // or Frontier. The old UI only enabled it after SLAM reached running, leaving
@@ -45,21 +45,21 @@ async function run(action: () => Promise<unknown>, confirmText: string, allowDur
 function startManual() {
   void run(
     () => robotApi.startManualMapping(),
-    '新建空白手动地图？系统将先停止当前受管进程并清除未保存的实时地图，再重新启动手动建图。已保存的 YAML/PGM 地图不会被删除。',
+    '新建空白手动地图？系统将重启 SLAM/Nav2 建图会话并清除未保存的实时地图，底盘、雷达、FAST-LIO 和点云转激光保持运行。已保存的 YAML/PGM 地图不会被删除。',
   )
 }
 
 function startAutomatic() {
   void run(
     () => robotApi.startAutomaticMapping(),
-    '新建空白自动地图？系统将先停止当前受管进程并清除未保存的实时地图，再由 Frontier 重新探索。已保存的 YAML/PGM 地图不会被删除。请确保物理急停可用。',
+    '新建空白自动地图？系统将重启 SLAM/Nav2/Frontier 建图会话并清除未保存的实时地图，底盘与传感器管线保持运行。已保存的 YAML/PGM 地图不会被删除。请确保物理急停可用。',
   )
 }
 
 function stopMapping() {
   void run(
     () => robotApi.stopMapping(),
-    '停止建图并关闭本次建图启动的机器人模块？自动建图会先取消 Frontier 目标。',
+    '停止当前建图？系统会停止 Frontier、Nav2、地图中继和 SLAM，但保留底盘、雷达、FAST-LIO 与点云转激光。',
     true,
   )
 }
